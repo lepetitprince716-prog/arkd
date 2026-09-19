@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 
 use indexmap::IndexMap;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{Error, Result};
@@ -18,6 +18,7 @@ pub struct TaskSpec {
     pub example: Value,
 }
 
+#[derive(Debug, Serialize)]
 pub struct TaskSummary {
     pub task_type: String,
     pub summary: String,
@@ -73,7 +74,13 @@ pub fn resolve(task_type: &str) -> Result<&'static str> {
     }
     let mut scored: Vec<(&str, f64)> = CATALOG
         .keys()
-        .map(|n| (n.as_str(), strsim::normalized_levenshtein(n, task_type)))
+        .map(|n| {
+            (
+                n.as_str(),
+                strsim::normalized_levenshtein(n, task_type)
+                    .max(strsim::jaro_winkler(&n.to_lowercase(), &lowered) * 0.95),
+            )
+        })
         .filter(|(_, s)| *s >= 0.6)
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
