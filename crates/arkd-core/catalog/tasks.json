@@ -1,0 +1,1224 @@
+[
+  {
+    "task_type": "StartUp",
+    "summary": "Open the game, wait for the main screen, optionally switch account.",
+    "notes": "Put this first in the queue. Account switching only reaches accounts already logged in on the device.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "client_type": {
+          "type": "string",
+          "enum": [
+            "Official",
+            "Bilibili",
+            "txwy",
+            "YoStarEN",
+            "YoStarJP",
+            "YoStarKR"
+          ],
+          "description": "Game client to start."
+        },
+        "start_game_enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Launch the client if it is not already running."
+        },
+        "account_name": {
+          "type": "string",
+          "description": "Switch to an already logged-in account. Matched as a substring of the login name, which must be unique among logged-in accounts (e.g. '4567' for '123****4567')."
+        }
+      },
+      "required": [
+        "client_type"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "client_type": "Official",
+      "start_game_enabled": true
+    }
+  },
+  {
+    "task_type": "CloseDown",
+    "summary": "Close the game client.",
+    "notes": "Usually queued last, after all farming tasks.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "client_type": {
+          "type": "string",
+          "enum": [
+            "Official",
+            "Bilibili",
+            "txwy",
+            "YoStarEN",
+            "YoStarJP",
+            "YoStarKR"
+          ],
+          "description": "Client to close. Nothing happens if omitted."
+        }
+      },
+      "required": [
+        "client_type"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "client_type": "Official"
+    }
+  },
+  {
+    "task_type": "Fight",
+    "summary": "Farm a stage, spending sanity potions and originite as configured.",
+    "notes": "'stage' cannot be changed while the task runs. Setting 'stone' spends originite prime, which is premium currency -- leave it at 0 unless the user asked for it.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "stage": {
+          "type": "string",
+          "description": "Stage code. Empty string means the current/last stage. Main-line stages accept a '-NORMAL'/'-HARD' suffix; resource stages must name level 5 or 6 explicitly (e.g. 'CE-6', 'LS-6', 'CA-5'); annihilation uses 'Annihilation' or e.g. 'Chernobog@Annihilation'."
+        },
+        "medicine": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum sanity potions to drink."
+        },
+        "medicine_expire_days": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Only drink potions expiring within this many days. 0 disables."
+        },
+        "stone": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum originite prime to crack. Spends premium currency."
+        },
+        "times": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2147483647,
+          "description": "Number of runs. Defaults to 'until sanity runs out'."
+        },
+        "series": {
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 10,
+          "default": 1,
+          "description": "Consecutive-run count (multi-battle). -1 leaves the in-game setting alone."
+        },
+        "drops": {
+          "type": "object",
+          "description": "Stop when a drop target is met: {item_id_or_name: count}.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "report_to_penguin": {
+          "type": "boolean",
+          "default": false,
+          "description": "Upload drop statistics to Penguin Stats."
+        },
+        "penguin_id": {
+          "type": "string",
+          "description": "Penguin Stats user id."
+        },
+        "report_to_yituliu": {
+          "type": "boolean",
+          "default": false,
+          "description": "Upload drop statistics to Yituliu."
+        },
+        "yituliu_id": {
+          "type": "string",
+          "description": "Yituliu user id."
+        },
+        "server": {
+          "type": "string",
+          "enum": [
+            "CN",
+            "US",
+            "JP",
+            "KR"
+          ],
+          "default": "CN",
+          "description": "Server the drop report is attributed to."
+        },
+        "client_type": {
+          "type": "string",
+          "enum": [
+            "Official",
+            "Bilibili",
+            "txwy",
+            "YoStarEN",
+            "YoStarJP",
+            "YoStarKR"
+          ],
+          "description": "Client to restart if the game drops out mid-run."
+        },
+        "DrGrandet": {
+          "type": "boolean",
+          "default": false,
+          "description": "Delay originite use until the last second of the sanity tick."
+        },
+        "expiring_medicine": {
+          "type": "integer",
+          "minimum": 0,
+          "deprecated": true,
+          "description": "Deprecated since MAA v6.8.0; use medicine_expire_days."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "stage": "1-7",
+      "medicine": 0,
+      "times": 5
+    }
+  },
+  {
+    "task_type": "Recruit",
+    "summary": "Run public recruitment: refresh tags, pick tags, confirm, expedite.",
+    "notes": "'select' is what gets ticked, 'confirm' is what gets committed. Listing 5 or 6 in 'confirm' will spend a slot on a senior/top operator tag instead of leaving it for manual handling.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "refresh": {
+          "type": "boolean",
+          "default": false,
+          "description": "Refresh tags when no 3-star tag combination is present."
+        },
+        "select": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "minItems": 1,
+          "description": "Star levels whose tags should be selected, e.g. [4, 5]."
+        },
+        "confirm": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "minItems": 1,
+          "description": "Star levels the recruitment is actually confirmed for."
+        },
+        "first_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags preferred on a 3-star result."
+        },
+        "extra_tags_mode": {
+          "type": "integer",
+          "enum": [
+            0,
+            1,
+            2
+          ],
+          "default": 0,
+          "description": "0 default, 1 always pick 3 tags, 2 pick 3 tags for high-rarity combos."
+        },
+        "times": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "How many recruitment slots to run."
+        },
+        "set_time": {
+          "type": "boolean",
+          "default": true,
+          "description": "Set the recruitment duration."
+        },
+        "expedite": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use expedited plans."
+        },
+        "expedite_times": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many expedited plans to use."
+        },
+        "skip_robot": {
+          "type": "boolean",
+          "default": true,
+          "description": "Skip recruitments whose tags guarantee a robot."
+        },
+        "preserve_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags never auto-selected, kept for manual review."
+        },
+        "recruitment_time": {
+          "type": "object",
+          "description": "Per star level recruitment minutes, e.g. {\"3\": 540}.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "report_to_penguin": {
+          "type": "boolean",
+          "default": false
+        },
+        "penguin_id": {
+          "type": "string"
+        },
+        "report_to_yituliu": {
+          "type": "boolean",
+          "default": false
+        },
+        "yituliu_id": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string",
+          "enum": [
+            "CN",
+            "US",
+            "JP",
+            "KR"
+          ],
+          "default": "CN"
+        }
+      },
+      "required": [
+        "select",
+        "confirm"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "select": [
+        4
+      ],
+      "confirm": [
+        3,
+        4
+      ],
+      "times": 4,
+      "skip_robot": true
+    }
+  },
+  {
+    "task_type": "Infrast",
+    "summary": "Rotate base facilities, use drones, collect clues, manage dorms.",
+    "notes": "mode 10000 additionally requires 'filename' and 'plan_index'; see MAA's base scheduling schema for the plan file format.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "mode": {
+          "type": "integer",
+          "enum": [
+            0,
+            10000,
+            20000
+          ],
+          "default": 0,
+          "description": "0 default (solver picks shifts), 10000 custom (reads a plan file), 20000 rotation (keeps shifts, does drone/clue chores)."
+        },
+        "facility": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "Mfg",
+              "Trade",
+              "Power",
+              "Control",
+              "Reception",
+              "Office",
+              "Dorm",
+              "Processing",
+              "Training"
+            ]
+          },
+          "minItems": 1,
+          "description": "Facilities to handle. In mode 0 this is an unordered set; in mode 10000/20000 the array order is the processing order."
+        },
+        "drones": {
+          "type": "string",
+          "enum": [
+            "_NotUse",
+            "Money",
+            "SyntheticJade",
+            "CombatRecord",
+            "PureGold",
+            "OriginStone",
+            "Chip"
+          ],
+          "default": "_NotUse",
+          "description": "What to spend drones on. Ignored in mode 10000."
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1.0,
+          "default": 0.3,
+          "description": "Morale threshold below which an operator is swapped out."
+        },
+        "replenish": {
+          "type": "boolean",
+          "default": false,
+          "description": "Replenish originium shards in the trading post."
+        },
+        "dorm_notstationed_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "dorm_trust_enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fill dorms with operators below max trust."
+        },
+        "fiammetta_targets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Operators Fiammetta may target."
+        },
+        "fiammetta_recovery_enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "use_pinus_sylvestris": {
+          "type": "boolean",
+          "default": false
+        },
+        "use_perception_information": {
+          "type": "boolean",
+          "default": false
+        },
+        "use_worldly_plight": {
+          "type": "boolean",
+          "default": false
+        },
+        "use_abyssal_hunter": {
+          "type": "boolean",
+          "default": false
+        },
+        "reception_message_board": {
+          "type": "boolean",
+          "default": true
+        },
+        "reception_clue_exchange": {
+          "type": "boolean",
+          "default": true
+        },
+        "reception_send_clue": {
+          "type": "boolean",
+          "default": true
+        },
+        "filename": {
+          "type": "string",
+          "description": "Custom plan file. Required when mode is 10000."
+        },
+        "plan_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Which plan inside the file to use. Required when mode is 10000."
+        },
+        "continue_training": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "facility"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "mode": 0,
+      "facility": [
+        "Mfg",
+        "Trade",
+        "Power",
+        "Control",
+        "Reception",
+        "Office",
+        "Dorm"
+      ],
+      "drones": "Money",
+      "threshold": 0.3
+    }
+  },
+  {
+    "task_type": "Mall",
+    "summary": "Visit friends' bases and spend credit in the store.",
+    "notes": "Item names are matched against the store as displayed by the client's own language.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "visit_friends": {
+          "type": "boolean",
+          "default": true
+        },
+        "shopping": {
+          "type": "boolean",
+          "default": true
+        },
+        "buy_first": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Items bought first, in order of preference."
+        },
+        "blacklist": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Items never bought."
+        },
+        "force_shopping_if_credit_full": {
+          "type": "boolean",
+          "default": false
+        },
+        "only_buy_discount": {
+          "type": "boolean",
+          "default": false
+        },
+        "reserve_max_credit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stop buying once credit would drop below 300."
+        },
+        "credit_fight": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run the daily credit-earning battle first."
+        },
+        "formation_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 0,
+          "description": "Squad slot used for the credit battle. 0 keeps the current squad."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "shopping": true,
+      "buy_first": [
+        "招聘许可",
+        "龙门币"
+      ],
+      "blacklist": [
+        "家具",
+        "碳"
+      ]
+    }
+  },
+  {
+    "task_type": "Award",
+    "summary": "Collect daily/weekly rewards, mail, and other free claims.",
+    "notes": "",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "award": {
+          "type": "boolean",
+          "default": true,
+          "description": "Daily and weekly missions."
+        },
+        "mail": {
+          "type": "boolean",
+          "default": false,
+          "description": "Claim all mail."
+        },
+        "recruit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Claim the free daily recruitment refresh."
+        },
+        "orundum": {
+          "type": "boolean",
+          "default": false,
+          "description": "Claim the weekly orundum from originium shards."
+        },
+        "mining": {
+          "type": "boolean",
+          "default": false,
+          "description": "Claim mining rewards."
+        },
+        "specialaccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "Claim monthly card rewards."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "award": true,
+      "mail": true
+    }
+  },
+  {
+    "task_type": "Roguelike",
+    "summary": "Run Integrated Strategies until a stop condition is met.",
+    "notes": "Several fields are theme-specific: foldartal options apply to Sami, collapsal paradigms to Mizuki, blackflow_* to BlackFlow. Passing one to the wrong theme is ignored rather than rejected.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "Phantom",
+            "Mizuki",
+            "Sami",
+            "Sarkaz",
+            "JieGarden",
+            "BlackFlow"
+          ],
+          "default": "Phantom",
+          "description": "Which IS season to play."
+        },
+        "mode": {
+          "type": "integer",
+          "default": 0,
+          "description": "Run strategy: 0 farm score, 1 farm originium ingots (exit after investing), 4 collectible mode, 5 clear the theme, 6 collapsal-paradigm farming. See MAA's IS schema for the full list, which is theme-dependent."
+        },
+        "squad": {
+          "type": "string",
+          "description": "Squad name, in the client's language."
+        },
+        "roles": {
+          "type": "string",
+          "description": "Starting role preference."
+        },
+        "core_char": {
+          "type": "string",
+          "description": "Operator name to start with."
+        },
+        "use_support": {
+          "type": "boolean",
+          "default": false
+        },
+        "use_nonfriend_support": {
+          "type": "boolean",
+          "default": false
+        },
+        "starts_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2147483647,
+          "description": "How many runs to start."
+        },
+        "difficulty": {
+          "type": "integer",
+          "minimum": -1,
+          "default": -1,
+          "description": "Difficulty to select. -1 leaves it unchanged."
+        },
+        "stop_at_final_boss": {
+          "type": "boolean",
+          "default": false
+        },
+        "stop_at_max_level": {
+          "type": "boolean",
+          "default": false
+        },
+        "investment_enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "investments_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 2147483647
+        },
+        "stop_when_investment_full": {
+          "type": "boolean",
+          "default": false
+        },
+        "investment_with_more_score": {
+          "type": "boolean",
+          "default": false
+        },
+        "start_with_elite_two": {
+          "type": "boolean",
+          "default": false
+        },
+        "only_start_with_elite_two": {
+          "type": "boolean",
+          "default": false
+        },
+        "refresh_trader_with_dice": {
+          "type": "boolean",
+          "default": false
+        },
+        "first_floor_foldartal": {
+          "type": "string"
+        },
+        "start_foldartal_list": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "collectible_mode_start_list": {
+          "type": "object"
+        },
+        "use_foldartal": {
+          "type": "boolean"
+        },
+        "check_collapsal_paradigms": {
+          "type": "boolean"
+        },
+        "double_check_collapsal_paradigms": {
+          "type": "boolean",
+          "default": true
+        },
+        "expected_collapsal_paradigms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "monthly_squad_auto_iterate": {
+          "type": "boolean"
+        },
+        "monthly_squad_check_comms": {
+          "type": "boolean"
+        },
+        "deep_exploration_auto_iterate": {
+          "type": "boolean"
+        },
+        "collectible_mode_shopping": {
+          "type": "boolean",
+          "default": false
+        },
+        "collectible_mode_squad": {
+          "type": "string"
+        },
+        "start_with_seed": {
+          "type": "string"
+        },
+        "blackflow_strategy": {
+          "type": "string"
+        },
+        "blackflow_cultivation_target": {
+          "type": "string",
+          "default": "swaddled_cat"
+        },
+        "find_playTime_target": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "theme": "Sarkaz",
+      "mode": 0,
+      "starts_count": 3
+    }
+  },
+  {
+    "task_type": "Copilot",
+    "summary": "Run a recorded battle plan (copilot job) on its stage.",
+    "notes": "Exactly one of 'filename' or 'copilot_list' must be set. When ARKAUTO_JOB_DIR is configured, paths are resolved inside it and paths escaping it are rejected.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Path to a copilot job JSON. Mutually exclusive with copilot_list."
+        },
+        "copilot_list": {
+          "type": "array",
+          "description": "A list of jobs to run in order. Mutually exclusive with filename.",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string"
+                  },
+                  "nav_name_override": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "is_raid": {
+                    "type": "boolean"
+                  },
+                  "formation": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "formation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Let MAA assemble the squad from the job's operator list."
+        },
+        "nav_name_override": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_raid": {
+          "type": "boolean",
+          "default": false
+        },
+        "loop_times": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "add_trust": {
+          "type": "boolean",
+          "default": false
+        },
+        "select_formation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4,
+          "default": 0
+        },
+        "use_sanity_potion": {
+          "type": "boolean",
+          "default": false
+        },
+        "need_navigate": {
+          "type": "boolean",
+          "default": true
+        },
+        "navigate_name": {
+          "type": "string"
+        },
+        "ignore_requirements": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "filename": "GA-EX8-raid.json",
+      "formation": false
+    }
+  },
+  {
+    "task_type": "SSSCopilot",
+    "summary": "Run a Stationary Security Service copilot job.",
+    "notes": "",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Path to an SSS job JSON."
+        },
+        "loop_times": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times to repeat."
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "filename": "sss/act33side.json",
+      "loop_times": 1
+    }
+  },
+  {
+    "task_type": "ParadoxCopilot",
+    "summary": "Run paradox simulation battles from a job file or list.",
+    "notes": "Exactly one of 'filename' or 'list' must be set.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Path to a single paradox job JSON. Mutually exclusive with list."
+        },
+        "list": {
+          "type": "array",
+          "description": "Jobs to run in order. Mutually exclusive with filename.",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "filename": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "filename": "paradox/exusiai.json"
+    }
+  },
+  {
+    "task_type": "Depot",
+    "summary": "Recognise the contents of the depot and report them via callback.",
+    "notes": "Read-only. Results arrive as a DepotInfo extra-info callback event.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true
+    }
+  },
+  {
+    "task_type": "OperBox",
+    "summary": "Recognise which operators the account owns.",
+    "notes": "Read-only. Results arrive as an OperBoxInfo extra-info callback event.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true
+    }
+  },
+  {
+    "task_type": "Reclamation",
+    "summary": "Farm the Reclamation Algorithm event.",
+    "notes": "",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "Fire",
+            "Tales",
+            "RelaunchAnchor"
+          ],
+          "default": "Tales",
+          "description": "Which Reclamation season to run."
+        },
+        "mode": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ],
+          "default": 0,
+          "description": "0 farm prosperity by re-entering stages, 1 farm currency by crafting."
+        },
+        "tools_to_craft": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "clear_store": {
+          "type": "boolean",
+          "default": false
+        },
+        "increment_mode": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ],
+          "default": 0,
+          "description": "0 click, 1 hold, for incrementing craft counts."
+        },
+        "num_craft_batches": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 16
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "theme": "Tales",
+      "mode": 1
+    }
+  },
+  {
+    "task_type": "SwitchTheme",
+    "summary": "Switch the in-game UI theme.",
+    "notes": "",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "themes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "themes"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "themes": [
+        "默认"
+      ]
+    }
+  },
+  {
+    "task_type": "Custom",
+    "summary": "Run named tasks straight out of MAA's task pipeline.",
+    "notes": "An escape hatch onto MAA's internal pipeline. The names are not part of the stable protocol and can change between MAA releases.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "task_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "description": "Task names from tasks.json; the first one that exists is run."
+        },
+        "params": {
+          "type": "object",
+          "description": "Overrides merged into the named task."
+        }
+      },
+      "required": [
+        "task_names"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "task_names": [
+        "AwardBegin"
+      ]
+    }
+  },
+  {
+    "task_type": "SingleStep",
+    "summary": "Execute one copilot action (deploy, skill, retreat) directly.",
+    "notes": "Interactive stepping, not unattended whole fights. Battle context dies with the MaaCore process: Deploy without stage+start in the same process fails with map::at key not found. Autonomous pause-then-batch play is arknights-agent-tools battle.py, not one MCP round-trip per action.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "copilot"
+          ],
+          "default": "copilot",
+          "description": "Step family. Only 'copilot' is supported."
+        },
+        "subtype": {
+          "type": "string",
+          "enum": [
+            "stage",
+            "start",
+            "action"
+          ],
+          "description": "Which single step to perform."
+        },
+        "details": {
+          "type": "object",
+          "description": "Step payload; shape depends on subtype."
+        }
+      },
+      "required": [
+        "type",
+        "subtype"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "type": "copilot",
+      "subtype": "action",
+      "details": {
+        "name": "Exusiai",
+        "location": [
+          5,
+          3
+        ],
+        "direction": "Left"
+      }
+    }
+  },
+  {
+    "task_type": "VideoRecognition",
+    "summary": "Turn a recorded battle video into a copilot job file.",
+    "notes": "Does not touch the device; it only analyses the video and writes a job file.",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to run this task. A disabled task stays in the queue and is skipped."
+        },
+        "filename": {
+          "type": "string",
+          "description": "Path to the video file."
+        }
+      },
+      "required": [
+        "filename"
+      ],
+      "additionalProperties": false
+    },
+    "example": {
+      "enable": true,
+      "filename": "battle.mp4"
+    }
+  }
+]
