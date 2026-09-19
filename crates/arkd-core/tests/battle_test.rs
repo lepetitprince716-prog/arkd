@@ -262,6 +262,96 @@ async fn deploy_batch_reports_frame_change_and_continues_after_rejection() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_paused_falls_back_to_task_completion_when_template_never_matches() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let template_path =
+            std::env::temp_dir().join(format!("arkd-hud-test-{}-fb.png", std::process::id()));
+        let (tpl_png, _) = pair(77);
+        std::fs::write(&template_path, &tpl_png).unwrap();
+
+        let (device, core) = setup(Some(&template_path));
+        device.ensure_connected().await.unwrap();
+        core.set_auto_finish(Duration::from_millis(40));
+        // no frame ever carries the template; the start task still completes
+        let mut seeds = vec![200, 1, 1, 2, 3];
+        seeds.resize(20, 9);
+        core.set_frames(frames(&seeds));
+
+        let report = battle::start_paused(&device, opts("LS-1", 5000))
+            .await
+            .unwrap();
+        std::fs::remove_file(&template_path).ok();
+        assert!(report.ok, "report: {report:?}");
+        assert_eq!(report.hud_detected, Some(false));
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("never matched"),
+            "detail: {:?}",
+            report.detail
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deploy_batch_marks_a_step_whose_task_errored() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup(None);
+        device.ensure_connected().await.unwrap();
+        core.set_auto_finish(Duration::from_millis(400));
+        // before/after pairs per step: [A,B] changed, [C,D] changed
+        let mut seeds = vec![200, 1, 2, 3, 4];
+        seeds.resize(20, 4);
+        core.set_frames(frames(&seeds));
+
+        // the first Deploy's task chain errors instead of completing
+        let core2 = core.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            core2.emit(
+                10000,
+                serde_json::json!({"taskchain": "SingleStep", "taskid": 1, "uuid": "fake-uuid"}),
+            );
+            core2.set_running(false);
+        });
+
+        let plan = vec![
+            DeployStep {
+                name: "Amiya".into(),
+                location: [4, 5],
+                direction: "Right".into(),
+                skill_usage: None,
+            },
+            DeployStep {
+                name: "Texas".into(),
+                location: [2, 2],
+                direction: "Up".into(),
+                skill_usage: None,
+            },
+        ];
+        let results = battle::deploy_batch(
+            &device,
+            plan,
+            Duration::from_millis(10),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        let err = results[0].error.as_deref().unwrap_or_default();
+        assert!(err.contains("error"), "error: {err}");
+        assert!(results[0].frame_changed);
+        assert!(results[1].error.is_none());
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deploy_batch_rejects_bad_direction_before_touching_the_core() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let (device, core) = setup(None);

@@ -12,27 +12,19 @@ pub struct HudTemplate {
     threshold: f64,
 }
 
-fn gray_of_bgr(data: &[u8], w: u32, h: u32) -> Vec<f32> {
-    let n = (w * h) as usize;
-    let mut gray = Vec::with_capacity(n);
-    for i in 0..n {
-        let b = data[i * 3] as f32;
-        let g = data[i * 3 + 1] as f32;
-        let r = data[i * 3 + 2] as f32;
-        gray.push(0.114 * b + 0.587 * g + 0.299 * r);
-    }
-    gray
-}
-
-fn crop(gray: &[f32], w: u32, roi: (u32, u32, u32, u32)) -> Vec<f32> {
+fn crop_gray_bgr(data: &[u8], w: u32, roi: (u32, u32, u32, u32)) -> Vec<f32> {
     let (x, y, rw, rh) = roi;
-    let mut out = Vec::with_capacity((rw * rh) as usize);
+    let mut gray = Vec::with_capacity((rw * rh) as usize);
     for j in 0..rh {
         for i in 0..rw {
-            out.push(gray[((y + j) * w + x + i) as usize]);
+            let px = (((y + j) * w + x + i) as usize) * 3;
+            let b = data[px] as f32;
+            let g = data[px + 1] as f32;
+            let r = data[px + 2] as f32;
+            gray.push(0.114 * b + 0.587 * g + 0.299 * r);
         }
     }
-    out
+    gray
 }
 
 fn resize_bilinear(gray: &[f32], w: u32, h: u32, tw: u32, th: u32) -> Vec<f32> {
@@ -98,11 +90,13 @@ impl HudTemplate {
             )));
         }
         let rgb = img.to_rgb8();
-        let mut gray = Vec::with_capacity((src_w * src_h) as usize);
+        let mut bgr = Vec::with_capacity((src_w * src_h * 3) as usize);
         for px in rgb.pixels() {
-            gray.push(0.114 * px[2] as f32 + 0.587 * px[1] as f32 + 0.299 * px[0] as f32);
+            bgr.push(px[2]);
+            bgr.push(px[1]);
+            bgr.push(px[0]);
         }
-        let gray = crop(&gray, src_w, roi);
+        let gray = crop_gray_bgr(&bgr, src_w, roi);
         Ok(Self {
             roi,
             src: (src_w, src_h),
@@ -137,13 +131,11 @@ impl HudTemplate {
         } else {
             let kx = frame.width as f64 / self.src.0 as f64;
             let ky = frame.height as f64 / self.src.1 as f64;
-            let rw2 = (rw as f64 * kx).round().max(1.0) as u32;
-            let rh2 = (rh as f64 * ky).round().max(1.0) as u32;
             (
                 (rx as f64 * kx).round() as u32,
                 (ry as f64 * ky).round() as u32,
-                rw2.min(frame.width),
-                rh2.min(frame.height),
+                (rw as f64 * kx).round().max(1.0) as u32,
+                (rh as f64 * ky).round().max(1.0) as u32,
             )
         };
         if sx + sw > frame.width || sy + sh > frame.height {
@@ -152,14 +144,13 @@ impl HudTemplate {
                 frame.width, frame.height
             )));
         }
-        let frame_gray = gray_of_bgr(&frame.data, frame.width, frame.height);
-        let patch = crop(&frame_gray, frame.width, (sx, sy, sw, sh));
+        let patch = crop_gray_bgr(&frame.data, frame.width, (sx, sy, sw, sh));
         let template = if (sw, sh) == (self.w, self.h) {
-            self.gray.clone()
+            &self.gray
         } else {
-            resize_bilinear(&self.gray, self.w, self.h, sw, sh)
+            &resize_bilinear(&self.gray, self.w, self.h, sw, sh)
         };
-        Ok(ncc(&template, &patch))
+        Ok(ncc(template, &patch))
     }
 
     pub fn matches(&self, frame: &BgrFrame) -> Result<bool> {
