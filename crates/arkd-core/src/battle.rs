@@ -164,6 +164,8 @@ pub struct StartPausedReport {
     pub stage: String,
     pub failed_at: Option<String>,
     pub detail: Option<String>,
+    pub fired_on: Option<String>,
+    pub pause_attempts: u32,
     pub paused: bool,
     pub hud_detected: Option<bool>,
     pub start_task_state: Option<String>,
@@ -179,6 +181,8 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
         stage: opts.stage.clone(),
         failed_at: None,
         detail: None,
+        fired_on: None,
+        pause_attempts: 0,
         paused: false,
         hud_detected: None,
         start_task_state: None,
@@ -228,17 +232,13 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
         let state = task_state(device, start_id);
         report.start_task_state = state.clone();
         if hud == Some(true) {
-            report.detail = Some("paused on HUD template match".to_string());
+            report.fired_on = Some("hud".to_string());
             fired = true;
             last_frame = Some(frame);
             break;
         }
         if is_terminal(state.as_deref()) && digest(&frame) != before {
-            report.detail = Some(if has_template {
-                "paused on start-step completion; HUD template never matched (check hud_template/hud_roi)".to_string()
-            } else {
-                "paused on start-step completion with a changed frame".to_string()
-            });
+            report.fired_on = Some("start_step".to_string());
             fired = true;
             last_frame = Some(frame);
             break;
@@ -258,6 +258,7 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
     }
 
     click_pause(device).await?;
+    report.pause_attempts = 1;
 
     let remaining = deadline.saturating_duration_since(Instant::now());
     if !is_terminal(task_state(device, start_id).as_deref()) && !remaining.is_zero() {
@@ -287,19 +288,28 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
     let mut paused = is_paused(device, opts.pause_gap).await?;
     if !paused {
         click_pause(device).await?;
+        report.pause_attempts = 2;
         tokio::time::sleep(opts.settle).await;
         paused = is_paused(device, opts.pause_gap).await?;
-        if paused {
-            report.detail =
-                Some("paused on the second attempt; the first click landed too early".to_string());
-        }
     }
 
     let frame = capture_bgr(device).await?;
     report.frame_png = Some(png_of(&frame)?);
     report.paused = paused;
     report.ok = paused;
-    if !paused {
+    if paused {
+        let mut detail = match report.fired_on.as_deref() {
+            Some("hud") => "paused on HUD template match".to_string(),
+            _ if has_template => {
+                "paused on start-step completion; HUD template never matched (check hud_template/hud_roi)".to_string()
+            }
+            _ => "paused on start-step completion with a changed frame".to_string(),
+        };
+        if report.pause_attempts == 2 {
+            detail.push_str("; second click needed");
+        }
+        report.detail = Some(detail);
+    } else {
         report.failed_at = Some("pause".to_string());
         report.detail = Some(
             "screen kept changing after two pause clicks; the battle is still running".to_string(),
