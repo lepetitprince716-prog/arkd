@@ -36,6 +36,14 @@ struct ClientOpts {
     device: Option<String>,
     #[arg(long, help = "Print compact JSON instead of pretty-printed")]
     json: bool,
+    #[arg(
+        long,
+        env = "ARKD_HEADERS",
+        value_delimiter = ';',
+        value_name = "Name: value",
+        help = "Extra HTTP header for the daemon request; repeatable (e.g. Cloudflare Access service tokens). ARKD_HEADERS takes a ';'-separated list."
+    )]
+    header: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -237,6 +245,49 @@ enum BattleCommand {
         #[command(flatten)]
         opts: ClientOpts,
     },
+    #[command(about = "Enter a stage and pause as soon as the field renders")]
+    StartPaused {
+        stage: String,
+        #[arg(long, default_value_t = 60, help = "Timeout in seconds (5..=300)")]
+        timeout: u32,
+        #[arg(short, long, help = "Save the paused frame to a PNG")]
+        output: Option<PathBuf>,
+        #[command(flatten)]
+        opts: ClientOpts,
+    },
+    #[command(about = "Deploy a batch of operators from a JSON plan file while paused")]
+    Deploy {
+        plan: PathBuf,
+        #[arg(long, default_value_t = 1000, help = "Settle time between steps (ms)")]
+        settle_ms: u64,
+        #[command(flatten)]
+        opts: ClientOpts,
+    },
+    #[command(about = "Resume a paused battle until the screen settles or times out")]
+    Resume {
+        #[arg(
+            long,
+            default_value_t = 30,
+            help = "Seconds to let the battle run (1..=600)"
+        )]
+        seconds: u32,
+        #[arg(short, long, help = "Save the final frame to a PNG")]
+        output: Option<PathBuf>,
+        #[command(flatten)]
+        opts: ClientOpts,
+    },
+    #[command(about = "Pause the battle and return the paused frame")]
+    Pause {
+        #[arg(short, long, help = "Save the paused frame to a PNG")]
+        output: Option<PathBuf>,
+        #[command(flatten)]
+        opts: ClientOpts,
+    },
+    #[command(about = "Report whether the battle screen is paused")]
+    IsPaused {
+        #[command(flatten)]
+        opts: ClientOpts,
+    },
 }
 
 #[derive(Subcommand)]
@@ -259,6 +310,18 @@ enum LaunchdCommand {
     },
 }
 
+fn resolve_headers(opts: &ClientOpts) -> anyhow::Result<Vec<(String, String)>> {
+    opts.header
+        .iter()
+        .map(|h| {
+            let (name, value) = h
+                .split_once(':')
+                .with_context(|| format!("header {h:?} is not in 'Name: value' form"))?;
+            Ok((name.trim().to_string(), value.trim().to_string()))
+        })
+        .collect()
+}
+
 fn resolve_token(opts: &ClientOpts) -> Option<String> {
     if let Ok(t) = std::env::var("ARKD_TOKEN")
         && !t.is_empty()
@@ -275,9 +338,44 @@ fn resolve_token(opts: &ClientOpts) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+async fn connect_client(opts: &ClientOpts) -> anyhow::Result<DaemonClient> {
+    DaemonClient::connect_with_headers(
+        &opts.url,
+        resolve_token(opts).as_deref(),
+        &resolve_headers(opts)?,
+    )
+    .await
+}
+
 async fn run_tool(opts: &ClientOpts, name: &str, args: Value) -> anyhow::Result<()> {
-    let client = DaemonClient::connect(&opts.url, resolve_token(opts).as_deref()).await?;
+    let client = connect_client(opts).await?;
     let result = client.call(name, with_device(opts, args)).await?;
+    print_result(&result, opts.json)
+}
+
+async fn run_tool_frame(
+    opts: &ClientOpts,
+    name: &str,
+    args: Value,
+    output: Option<&Path>,
+) -> anyhow::Result<()> {
+    let client = connect_client(opts).await?;
+    let result = client.call(name, with_device(opts, args)).await?;
+    if result.is_error.unwrap_or(false) {
+        return print_result(&result, opts.json);
+    }
+    if let Some(image) = result.content.iter().find_map(|c| c.as_image()) {
+        match output {
+            Some(path) => {
+                let bytes = BASE64.decode(&image.data).context("bad base64 image")?;
+                std::fs::write(path, &bytes)
+                    .with_context(|| format!("could not write {}", path.display()))?;
+            }
+            None => {
+                eprintln!("note: the tool returned a frame image; pass -o FRAME.png to save it");
+            }
+        }
+    }
     print_result(&result, opts.json)
 }
 
@@ -487,6 +585,56 @@ async fn run_battle(cmd: BattleCommand) -> anyhow::Result<()> {
             }
             run_tool(&opts, "battle_action", args).await
         }
+        BattleCommand::StartPaused {
+            stage,
+            timeout,
+            output,
+            opts,
+        } => {
+            run_tool_frame(
+                &opts,
+                "battle_start_paused",
+                json!({"stage": stage, "timeout_seconds": timeout}),
+                output.as_deref(),
+            )
+            .await
+        }
+        BattleCommand::Deploy {
+            plan,
+            settle_ms,
+            opts,
+        } => {
+            let text = std::fs::read_to_string(&plan)
+                .with_context(|| format!("could not read {}", plan.display()))?;
+            let plan_json =
+                serde_json::from_str::<Value>(&text).context("PLAN.json is not valid JSON")?;
+            if !plan_json.is_array() {
+                anyhow::bail!("PLAN.json must be a JSON array of deployment steps");
+            }
+            run_tool(
+                &opts,
+                "battle_deploy_batch",
+                json!({"plan": plan_json, "settle_ms": settle_ms}),
+            )
+            .await
+        }
+        BattleCommand::Resume {
+            seconds,
+            output,
+            opts,
+        } => {
+            run_tool_frame(
+                &opts,
+                "battle_resume_until",
+                json!({"seconds": seconds}),
+                output.as_deref(),
+            )
+            .await
+        }
+        BattleCommand::Pause { output, opts } => {
+            run_tool_frame(&opts, "battle_pause", json!({}), output.as_deref()).await
+        }
+        BattleCommand::IsPaused { opts } => run_tool(&opts, "battle_is_paused", json!({})).await,
     }
 }
 
@@ -498,7 +646,7 @@ async fn screenshot(
     format: &str,
     quality: u8,
 ) -> anyhow::Result<()> {
-    let client = DaemonClient::connect(&opts.url, resolve_token(opts).as_deref()).await?;
+    let client = connect_client(opts).await?;
     let result = client
         .call(
             "screen_capture",
@@ -544,7 +692,7 @@ async fn screenshot(
 }
 
 async fn mcp_proxy(opts: &ClientOpts) -> anyhow::Result<()> {
-    let client = DaemonClient::connect(&opts.url, resolve_token(opts).as_deref()).await?;
+    let client = connect_client(opts).await?;
     let handler = crate::proxy::ProxyHandler::new(client);
     let service = rmcp::serve_server(handler, rmcp::transport::io::stdio())
         .await

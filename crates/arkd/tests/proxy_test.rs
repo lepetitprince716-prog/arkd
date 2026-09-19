@@ -42,8 +42,13 @@ async fn stdio_proxy_forwards_to_daemon() {
         names,
         vec![
             "battle_action",
+            "battle_deploy_batch",
+            "battle_is_paused",
+            "battle_pause",
+            "battle_resume_until",
             "battle_set_stage",
             "battle_start",
+            "battle_start_paused",
             "battle_state",
             "device_connect",
             "devices_list",
@@ -91,6 +96,72 @@ async fn stdio_proxy_forwards_to_daemon() {
 
     let prompts = client.list_prompts(None).await.unwrap().prompts;
     assert!(prompts.iter().any(|p| p.name == "daily_routine"));
+
+    client.cancel().await.unwrap();
+    serve.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stdio_proxy_sends_custom_headers() {
+    use axum::http::HeaderMap;
+    use std::sync::Mutex;
+
+    let seen: Arc<Mutex<Vec<HeaderMap>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_mw = seen.clone();
+    let factory = FakeCoreFactory::new();
+    let mut config = Config::default();
+    config.server.bind = "127.0.0.1:0".parse().unwrap();
+    let state = App::build(config, Arc::new(factory), "fake".to_string()).unwrap();
+    let router = App::router(state).layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let seen = seen_mw.clone();
+            async move {
+                seen.lock().unwrap().push(req.headers().clone());
+                next.run(req).await
+            }
+        },
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let serve = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let transport = TokioChildProcess::new(
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_arkd")).configure(|c| {
+            c.args([
+                "mcp",
+                "--url",
+                &format!("http://{addr}/mcp"),
+                "--header",
+                "X-Test: 1",
+            ]);
+        }),
+    )
+    .unwrap();
+    let client = ClientConfig::default().serve(transport).await.unwrap();
+    client
+        .call_tool(
+            CallToolRequestParams::new("status").with_arguments(
+                serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(json!({}))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let has_header = {
+        let headers = seen.lock().unwrap();
+        headers
+            .iter()
+            .any(|h| h.get("x-test").and_then(|v| v.to_str().ok()) == Some("1"))
+    };
+    assert!(has_header);
 
     client.cancel().await.unwrap();
     serve.abort();

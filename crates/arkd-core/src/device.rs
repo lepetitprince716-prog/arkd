@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -12,6 +12,7 @@ use crate::{
     config::{Config, DeviceConfig, DeviceKind},
     core_api::CoreFactory,
     error::{Error, Result},
+    hud::HudTemplate,
     playtools::PlayToolsClient,
     screen::Geometry,
     session::{ConnectionInfo, MaaSession},
@@ -22,6 +23,7 @@ pub struct Device {
     pub config: DeviceConfig,
     pub session: MaaSession,
     playtools: Mutex<Option<PlayToolsClient>>,
+    hud: OnceLock<Result<Option<HudTemplate>>>,
     action_lock: Mutex<()>,
     connect_lock: Mutex<()>,
     busy: AtomicBool,
@@ -93,6 +95,19 @@ impl Device {
         })
     }
 
+    pub fn hud_template(&self) -> Result<Option<&HudTemplate>> {
+        let loaded = self.hud.get_or_init(|| match &self.config.hud_template {
+            Some(path) => {
+                HudTemplate::load(path, self.config.hud_roi, self.config.hud_threshold).map(Some)
+            }
+            None => Ok(None),
+        });
+        match loaded {
+            Ok(v) => Ok(v.as_ref()),
+            Err(e) => Err(Error::Image(format!("HUD template unavailable: {e}"))),
+        }
+    }
+
     pub async fn with_action<T, F, Fut>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Fut,
@@ -151,6 +166,7 @@ impl DeviceRegistry {
                 config: d.clone(),
                 session,
                 playtools: Mutex::new(None),
+                hud: OnceLock::new(),
                 action_lock: Mutex::new(()),
                 connect_lock: Mutex::new(()),
                 busy: AtomicBool::new(false),

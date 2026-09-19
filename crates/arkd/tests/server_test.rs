@@ -73,8 +73,13 @@ async fn daemon_serves_mcp_and_healthz() {
         names,
         vec![
             "battle_action",
+            "battle_deploy_batch",
+            "battle_is_paused",
+            "battle_pause",
+            "battle_resume_until",
             "battle_set_stage",
             "battle_start",
+            "battle_start_paused",
             "battle_state",
             "device_connect",
             "devices_list",

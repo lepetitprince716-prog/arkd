@@ -343,6 +343,8 @@ impl CoreFactory for RealCoreFactory {
 
 #[cfg(any(test, feature = "fake"))]
 pub mod fake {
+    pub type ClickHook = Arc<dyn Fn(i32, i32) + Send + Sync>;
+
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -365,6 +367,10 @@ pub mod fake {
         image_png: Mutex<Option<Vec<u8>>>,
         fresh_image_png: Mutex<Option<Vec<u8>>>,
         image_bgr: Mutex<Option<Vec<u8>>>,
+        append_fail_next: Mutex<u32>,
+        frames: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
+        frame_cursor: Mutex<usize>,
+        click_hook: Mutex<Option<ClickHook>>,
         auto_finish: Mutex<Option<std::time::Duration>>,
         running_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
@@ -395,6 +401,10 @@ pub mod fake {
                 image_png: Mutex::new(Some(b"\x89PNG\r\n\x1a\nfake".to_vec())),
                 fresh_image_png: Mutex::new(None),
                 image_bgr: Mutex::new(None),
+                append_fail_next: Mutex::new(0),
+                frames: Mutex::new(Vec::new()),
+                frame_cursor: Mutex::new(0),
+                click_hook: Mutex::new(None),
                 auto_finish: Mutex::new(None),
                 running_hook: Mutex::new(None),
             }
@@ -427,6 +437,10 @@ pub mod fake {
             *self.append_ok.lock().unwrap() = !v;
         }
 
+        pub fn fail_next_appends(&self, n: u32) {
+            *self.append_fail_next.lock().unwrap() = n;
+        }
+
         pub fn refuse_start(&self, v: bool) {
             *self.start_ok.lock().unwrap() = !v;
         }
@@ -441,6 +455,19 @@ pub mod fake {
 
         pub fn set_image_bgr(&self, bytes: Option<Vec<u8>>) {
             *self.image_bgr.lock().unwrap() = bytes;
+        }
+
+        pub fn set_frames(&self, frames: Vec<(Vec<u8>, Vec<u8>)>) {
+            if let Some((png, bgr)) = frames.first() {
+                *self.image_png.lock().unwrap() = Some(png.clone());
+                *self.image_bgr.lock().unwrap() = Some(bgr.clone());
+            }
+            *self.frame_cursor.lock().unwrap() = 0;
+            *self.frames.lock().unwrap() = frames;
+        }
+
+        pub fn set_click_hook(&self, hook: ClickHook) {
+            *self.click_hook.lock().unwrap() = Some(hook);
         }
 
         pub fn set_auto_finish(&self, after: std::time::Duration) {
@@ -515,6 +542,13 @@ pub mod fake {
         fn append_task(&self, task_type: &str, params_json: &str) -> Result<i32> {
             if !*self.append_ok.lock().unwrap() {
                 return Ok(0);
+            }
+            {
+                let mut fail = self.append_fail_next.lock().unwrap();
+                if *fail > 0 {
+                    *fail -= 1;
+                    return Ok(0);
+                }
             }
             let mut next = self.next_task_id.lock().unwrap();
             let id = *next;
@@ -601,6 +635,22 @@ pub mod fake {
 
         fn screencap(&self) -> Result<()> {
             *self.screencap_calls.lock().unwrap() += 1;
+            {
+                let frames = self.frames.lock().unwrap();
+                if !frames.is_empty() {
+                    let mut cursor = self.frame_cursor.lock().unwrap();
+                    let (png, bgr) = frames[*cursor].clone();
+                    *cursor = (*cursor + 1).min(frames.len() - 1);
+                    drop(frames);
+                    *self.image_png.lock().unwrap() = Some(png);
+                    *self.image_bgr.lock().unwrap() = Some(bgr);
+                    return if *self.connected.lock().unwrap() {
+                        Ok(())
+                    } else {
+                        Err(Error::CoreLoad("not connected".to_string()))
+                    };
+                }
+            }
             if let Some(fresh) = self.fresh_image_png.lock().unwrap().clone() {
                 *self.image_png.lock().unwrap() = Some(fresh);
             }
@@ -630,6 +680,10 @@ pub mod fake {
         fn click(&self, x: i32, y: i32) -> Result<()> {
             self.clicks.lock().unwrap().push((x, y));
             if *self.connected.lock().unwrap() {
+                let hook = self.click_hook.lock().unwrap().clone();
+                if let Some(hook) = hook {
+                    hook(x, y);
+                }
                 Ok(())
             } else {
                 Err(Error::CoreLoad("not connected".to_string()))

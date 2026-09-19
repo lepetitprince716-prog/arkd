@@ -1,3 +1,4 @@
+pub mod battle;
 pub mod battle_state;
 pub mod catalog;
 pub mod config;
@@ -5,6 +6,7 @@ pub mod core_api;
 pub mod device;
 pub mod error;
 pub mod events;
+pub mod hud;
 pub mod messages;
 pub mod playtools;
 pub mod screen;
