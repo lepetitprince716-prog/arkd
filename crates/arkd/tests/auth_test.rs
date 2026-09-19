@@ -92,3 +92,85 @@ async fn wrong_token_is_unauthorized() {
 async fn router_response(r: &Router, ip: Ipv4Addr, auth: Option<&str>) -> axum::response::Response {
     r.clone().oneshot(req(ip, auth)).await.unwrap()
 }
+
+fn app_state() -> Arc<AppState> {
+    let config = Config::default();
+    arkd::app::App::build(
+        config,
+        Arc::new(arkd_core::core_api::fake::FakeCoreFactory::new()),
+        "fake".to_string(),
+    )
+    .unwrap()
+}
+
+fn mcp_req(ip: Ipv4Addr, auth: Option<&str>) -> Request<axum::body::Body> {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .body(axum::body::Body::from(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}"#,
+        ))
+        .unwrap();
+    if let Some(token) = auth {
+        req.headers_mut().insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}").parse().unwrap(),
+        );
+    }
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::new(IpAddr::V4(ip), 5000)));
+    req
+}
+
+fn with_token(mut state: Arc<AppState>) -> Router {
+    Arc::get_mut(&mut state).unwrap().token = Some("secret".to_string());
+    arkd::app::App::router(state)
+}
+
+#[tokio::test]
+async fn route_mcp_rejects_non_loopback_without_token() {
+    let app = with_token(app_state());
+    let resp = app
+        .oneshot(mcp_req(Ipv4Addr::new(10, 0, 0, 1), None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(resp.headers().get("www-authenticate").unwrap(), "Bearer");
+}
+
+#[tokio::test]
+async fn route_mcp_passes_non_loopback_with_token() {
+    let app = with_token(app_state());
+    let resp = app
+        .oneshot(mcp_req(Ipv4Addr::new(10, 0, 0, 1), Some("secret")))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn route_healthz_is_open_to_non_loopback() {
+    let app = with_token(app_state());
+    let mut req = Request::builder()
+        .uri("/healthz")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+        IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+        5000,
+    )));
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn route_mcp_passes_loopback_without_token() {
+    let app = with_token(app_state());
+    let resp = app
+        .oneshot(mcp_req(Ipv4Addr::new(127, 0, 0, 1), None))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}

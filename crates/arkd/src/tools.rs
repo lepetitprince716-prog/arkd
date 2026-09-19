@@ -557,7 +557,7 @@ impl ArkdServer {
         let params = p.params.unwrap_or_else(|| json!({}));
         let task_type = p.task_type.clone();
         let task = device
-            .with_action(|| async move { session.append_task(&task_type, params) })
+            .with_blocking_action(move || session.append_task(&task_type, params))
             .await
             .map_err(tool_error)?;
         json_result(task.describe())
@@ -575,7 +575,7 @@ impl ArkdServer {
         let task_id = p.task_id;
         let params = p.params;
         let out = device
-            .with_action(|| async move { session.set_task_params(task_id, params) })
+            .with_blocking_action(move || session.set_task_params(task_id, params))
             .await
             .map_err(tool_error)?;
         json_result(out)
@@ -607,7 +607,7 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         let (started, task_types, next_seq) = device
-            .with_action(|| async move {
+            .with_blocking_action(move || {
                 let r = session.start()?;
                 let seq = session.status().latest_event_seq;
                 Ok((r.started, r.task_types, seq))
@@ -622,7 +622,7 @@ impl ArkdServer {
     }
 
     #[tool(
-        description = "Stop the current run and clear the queue's completed bookkeeping. Tasks already running are interrupted at MaaCore's next checkpoint."
+        description = "Stop the current run and clear the queue. Interrupts whatever the game is doing part-way. Queued tasks are discarded, not paused -- re-append anything that should still run."
     )]
     async fn maa_stop(
         &self,
@@ -631,7 +631,7 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         let r = device
-            .with_action(|| async move { session.stop() })
+            .with_blocking_action(move || session.stop())
             .await
             .map_err(tool_error)?;
         json_result(json!({
@@ -651,7 +651,7 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         device
-            .with_action(|| async move { session.back_to_home() })
+            .with_blocking_action(move || session.back_to_home())
             .await
             .map_err(tool_error)?;
         json_result(json!({ "ok": true }))
@@ -833,7 +833,7 @@ impl ArkdServer {
         ];
         let session = device.session.clone();
         let (queued, skipped) = device
-            .with_action(|| async move {
+            .with_blocking_action(move || {
                 let mut queued = Vec::new();
                 let mut skipped = Vec::new();
                 for step in &steps {
@@ -930,7 +930,7 @@ impl ArkdServer {
                 arkd_core::config::resolve_job_path(&path, self.state.config.job_dir.as_deref())
                     .map_err(tool_error)?;
             let bytes = encoded.bytes.len();
-            std::fs::write(&path, &encoded.bytes).map_err(|e| {
+            tokio::fs::write(&path, &encoded.bytes).await.map_err(|e| {
                 ErrorData::internal_error(format!("could not write {path}: {e}"), None)
             })?;
             let mut m = meta;
@@ -958,6 +958,8 @@ impl ArkdServer {
         let use_playtools = self.via_is_playtools(&device, &p.via)?;
         let geometry = device.geometry().await.map_err(tool_error)?;
         let (dx, dy) = geometry.to_device(p.x, p.y, space);
+        let dx_u16 = to_u16(dx, "x")?;
+        let dy_u16 = to_u16(dy, "y")?;
         let via_name = if use_playtools {
             "playtools"
         } else {
@@ -971,7 +973,7 @@ impl ArkdServer {
                         .as_mut()
                         .ok_or_else(|| Error::PlayTools("PlayTools client unavailable".into()))?;
                     client
-                        .tap(dx as u16, dy as u16, Duration::from_millis(60))
+                        .tap(dx_u16, dy_u16, Duration::from_millis(60))
                         .await?;
                 } else {
                     let session = device.session.clone();
@@ -1013,13 +1015,15 @@ impl ArkdServer {
         let space = parse_coord_space(&p.coord_space)?;
         let geometry = device.geometry().await.map_err(tool_error)?;
         let (dx, dy) = geometry.to_device(p.x, p.y, space);
+        let dx_u16 = to_u16(dx, "x")?;
+        let dy_u16 = to_u16(dy, "y")?;
         device
             .with_action(|| async {
                 let mut guard = device.playtools().await?;
                 let client = guard
                     .as_mut()
                     .ok_or_else(|| Error::PlayTools("PlayTools client unavailable".into()))?;
-                client.touch(phase, dx as u16, dy as u16, p.contact).await
+                client.touch(phase, dx_u16, dy_u16, p.contact).await
             })
             .await
             .map_err(tool_error)?;
@@ -1049,9 +1053,9 @@ impl ArkdServer {
             .iter()
             .map(|&[x, y]| {
                 let (dx, dy) = geometry.to_device(x, y, space);
-                (dx as u16, dy as u16)
+                Ok((to_u16(dx, "x")?, to_u16(dy, "y")?))
             })
-            .collect();
+            .collect::<Result<_, ErrorData>>()?;
         let count = points.len();
         device
             .with_action(|| async {
@@ -1110,7 +1114,7 @@ impl ArkdServer {
         let session = device.session.clone();
         let stage = p.stage.clone();
         let task = device
-            .with_action(|| async move {
+            .with_blocking_action(move || {
                 session.single_step("stage", Some(json!({"stage_name": stage})))
             })
             .await
@@ -1128,7 +1132,7 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         let task = device
-            .with_action(|| async move { session.single_step("start", None) })
+            .with_blocking_action(move || session.single_step("start", None))
             .await
             .map_err(tool_error)?;
         json_result(task.describe())
@@ -1183,11 +1187,21 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         let task = device
-            .with_action(|| async move { session.single_step("action", Some(details)) })
+            .with_blocking_action(move || session.single_step("action", Some(details)))
             .await
             .map_err(tool_error)?;
         json_result(task.describe())
     }
+}
+
+fn to_u16(v: i32, axis: &str) -> Result<u16, ErrorData> {
+    if v < 0 {
+        return Err(ErrorData::invalid_params(
+            format!("{axis} resolved to {v}, below the device coordinate range"),
+            None,
+        ));
+    }
+    Ok(v.min(u16::MAX as i32) as u16)
 }
 
 fn parse_coord_space(s: &str) -> Result<CoordSpace, ErrorData> {
