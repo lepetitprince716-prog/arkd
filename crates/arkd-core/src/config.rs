@@ -147,7 +147,7 @@ fn default_devices() -> Vec<DeviceConfig> {
     }
 }
 
-fn expand_tilde(path: &Path) -> PathBuf {
+pub fn expand_tilde(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     if let Some(rest) = s.strip_prefix("~/")
         && let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
@@ -229,7 +229,7 @@ pub fn resolve_job_path(raw: &str, job_dir: Option<&Path>) -> Result<String> {
     Ok(candidate.to_string_lossy().into_owned())
 }
 
-fn default_config_path() -> PathBuf {
+pub fn default_config_path() -> PathBuf {
     #[cfg(target_os = "macos")]
     {
         expand_tilde(Path::new("~/.config/arkd/config.toml"))
