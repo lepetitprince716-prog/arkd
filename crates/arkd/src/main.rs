@@ -1,3 +1,3 @@
-fn main() {
-    println!("arkd {}", env!("CARGO_PKG_VERSION"));
+fn main() -> anyhow::Result<()> {
+    arkd::cli::run()
 }
