@@ -45,6 +45,12 @@ async fn daemon_serves_mcp_and_healthz() {
     let core = factory.core.clone();
     let mut config = Config::default();
     config.server.bind = "127.0.0.1:0".parse().unwrap();
+    config.devices = vec![arkd_core::config::DeviceConfig {
+        name: "fake".to_string(),
+        default: true,
+        device_size: Some((1920, 1080)),
+        ..arkd_core::config::DeviceConfig::default()
+    }];
     config.devices[0].kind = DeviceKind::Playtools {
         address: playtools.addr.to_string(),
     };

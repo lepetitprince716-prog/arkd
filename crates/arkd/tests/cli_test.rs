@@ -24,7 +24,7 @@ async fn token_init_writes_a_private_token_file() {
     let config_path = dir.path().join("config.toml");
     std::fs::write(
         &config_path,
-        format!("[server]\ntoken_file = \"{}\"\n", token_path.display()),
+        format!("[server]\ntoken_file = '{}'\n", token_path.display()),
     )
     .unwrap();
     let config = config_path.to_string_lossy().to_string();
@@ -94,6 +94,12 @@ async fn cli_talks_to_a_fake_daemon() {
     ));
     let mut config = Config::default();
     config.server.bind = "127.0.0.1:0".parse().unwrap();
+    config.devices = vec![arkd_core::config::DeviceConfig {
+        name: "fake".to_string(),
+        default: true,
+        device_size: Some((1920, 1080)),
+        ..arkd_core::config::DeviceConfig::default()
+    }];
     let state = App::build(config, Arc::new(factory), "fake".to_string()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
