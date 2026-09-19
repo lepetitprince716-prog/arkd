@@ -164,6 +164,61 @@ fn run_completion_is_folded_into_task_state() {
 }
 
 #[test]
+fn single_step_waits_briefly_for_the_running_flag_to_clear() {
+    let (session, core) = connected();
+    core.set_running(true);
+    let core2 = core.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        core2.set_running(false);
+    });
+    session.single_step("start", None).unwrap();
+}
+
+#[test]
+fn single_step_still_refuses_when_the_core_keeps_running() {
+    let (session, core) = connected();
+    core.set_running(true);
+    let started = Instant::now();
+    let err = session.single_step("start", None).unwrap_err();
+    assert!(err.to_string().contains("already running"), "{err}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn a_bare_action_object_is_refused_by_the_core() {
+    let (session, _core) = connected();
+    let err = session
+        .single_step(
+            "action",
+            Some(serde_json::json!({"type": "Deploy", "name": "Exusiai"})),
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("AsstAppendTask returned 0"),
+        "{err}"
+    );
+}
+
+#[test]
+fn single_action_wraps_the_action_in_an_actions_array() {
+    let (session, core) = connected();
+    session
+        .single_action(serde_json::json!({"type": "Deploy", "name": "Exusiai"}))
+        .unwrap();
+    let tasks = core.tasks.lock().unwrap();
+    assert_eq!(tasks[0].1, "SingleStep");
+    assert_eq!(
+        tasks[0].2["details"]["actions"][0]["name"],
+        serde_json::json!("Exusiai")
+    );
+}
+
+#[test]
 fn stop_clears_the_queue_and_marks_tasks_stopped() {
     let (session, core) = connected();
     session

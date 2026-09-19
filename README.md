@@ -68,7 +68,11 @@ Scheduled Task): `deploy/`.
 ## The battle loop
 
 Deployments are driven through MaaCore `SingleStep` actions, and the CN client
-accepts them while the battle is paused. The intended loop is:
+accepts them while the battle is paused. Precondition: the game must already be
+on the stage's formation (squad) screen — the `stage` step only loads the tile
+map into MaaCore, it does not navigate the game. The `start` step matches both
+开始行动 and 开始演习, so a zero-sanity drill is run by entering the formation
+screen through the stage's 演习 (practice) button first. The intended loop is:
 
 1. `battle_start_paused <stage>` — loads the tile map, starts the fight and
    pauses as soon as the field renders (HUD template, or start-step
@@ -87,7 +91,10 @@ timing-sensitive and the battle context must stay in the daemon process.
 Screenshot space is the normalised `screenshot_size` (default 1280×720) — the
 PNG returned by `screen_capture` and the battle tools. `device_size` (e.g.
 1920×1080 on PlayCover) is where taps land; the daemon converts between them.
-All tools that take coordinates default to screenshot space.
+All tools that take coordinates default to screenshot space. MaaCore's own
+click API takes its normalised 1280×720 coordinates (not device pixels), and
+arkd converts for every path — `screen_tap` and the battle tools still accept
+screenshot coordinates as documented.
 
 ## Development
 

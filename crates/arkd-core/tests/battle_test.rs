@@ -40,7 +40,14 @@ fn setup(hud_template: Option<&std::path::Path>) -> (Arc<Device>, Arc<FakeCore>)
             name: "playcover".to_string(),
             default: true,
             device_size: Some((1920, 1080)),
-            hud_template: hud_template.map(|p| p.to_path_buf()),
+            // "none" disables the embedded defaults so these tests drive the
+            // no-template path unless a fixture is passed in
+            hud_template: Some(
+                hud_template
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| "none".into()),
+            ),
+            hud_paused_template: Some("none".into()),
             hud_roi: (40, 4, 16, 12),
             ..DeviceConfig::default()
         }],
@@ -57,10 +64,11 @@ fn opts(stage: &str, timeout_ms: u64) -> StartPausedOptions {
         timeout: Duration::from_millis(timeout_ms),
         pause_gap: Duration::from_millis(30),
         settle: Duration::from_millis(30),
+        hud_grace: Duration::from_millis(150),
     }
 }
 
-const PAUSE_CLICK: (i32, i32) = (1815, 82);
+const PAUSE_CLICK: (i32, i32) = (1210, 55);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn start_paused_happy_path_without_template() {
@@ -93,6 +101,31 @@ async fn start_paused_happy_path_without_template() {
         assert_eq!(core.clicks.lock().unwrap().as_slice(), &[PAUSE_CLICK]);
         let img = image::load_from_memory(&report.frame_png.unwrap()).unwrap();
         assert_eq!((img.width(), img.height()), (64, 36));
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_paused_survives_running_flag_lagging_behind_completion() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup(None);
+        device.ensure_connected().await.unwrap();
+        // real MaaCore emits the completion callbacks before clearing
+        // AsstRunning; the next SingleStep must wait the flag out
+        core.set_running_clear_delay(Duration::from_millis(150));
+        core.set_auto_finish(Duration::from_millis(40));
+        let mut seeds = vec![200, 1];
+        seeds.resize(20, 9);
+        core.set_frames(frames(&seeds));
+
+        let report = battle::start_paused(&device, opts("LS-1", 5000))
+            .await
+            .unwrap();
+        assert!(report.ok, "report: {report:?}");
+        assert!(report.paused);
+        assert_eq!(report.fired_on.as_deref(), Some("start_step"));
+        assert!(report.failed_at.is_none(), "report: {report:?}");
     })
     .await
     .unwrap();
@@ -215,6 +248,89 @@ async fn start_paused_retries_the_pause_click_once() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_paused_retries_pause_until_the_screen_freezes() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup(None);
+        device.ensure_connected().await.unwrap();
+        core.set_auto_finish(Duration::from_millis(40));
+        let mut seeds: Vec<u8> = (0..40u8).collect();
+        seeds[0] = 200;
+        core.set_frames(frames(&seeds));
+
+        // the first two clicks land while the screen is still animating;
+        // only after the third does it hold still
+        let count = Arc::new(AtomicUsize::new(0));
+        let core2 = core.clone();
+        let count2 = count.clone();
+        core.set_click_hook(Arc::new(move |_, _| {
+            let n = count2.fetch_add(1, Ordering::SeqCst) + 1;
+            if n < 3 {
+                let seeds: Vec<u8> = (0..40u8).map(|i| 60 + i).collect();
+                core2.set_frames(frames(&seeds));
+            } else {
+                core2.set_frames(frames(&[9, 9, 9, 9, 9, 9, 9, 9]));
+            }
+        }));
+
+        let report = battle::start_paused(&device, opts("LS-1", 5000))
+            .await
+            .unwrap();
+        assert!(report.ok, "report: {report:?}");
+        assert!(report.paused);
+        assert_eq!(report.pause_attempts, 3);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("3 pause clicks needed"),
+            "detail: {:?}",
+            report.detail
+        );
+        assert_eq!(core.clicks.lock().unwrap().len(), 3);
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_paused_reports_failure_when_the_deadline_runs_out_mid_pause() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup(None);
+        device.ensure_connected().await.unwrap();
+        core.set_auto_finish(Duration::from_millis(40));
+        let mut seeds: Vec<u8> = (0..60u8).collect();
+        seeds[0] = 200;
+        core.set_frames(frames(&seeds));
+
+        // the screen never freezes; every click gets a fresh changing reel
+        let core2 = core.clone();
+        core.set_click_hook(Arc::new(move |_, _| {
+            let seeds: Vec<u8> = (0..60u8).map(|i| 60u8.wrapping_add(i)).collect();
+            core2.set_frames(frames(&seeds));
+        }));
+
+        let report = battle::start_paused(&device, opts("LS-1", 400))
+            .await
+            .unwrap();
+        assert!(!report.ok);
+        assert_eq!(report.failed_at.as_deref(), Some("pause"));
+        assert!(report.pause_attempts >= 2, "report: {report:?}");
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("pause clicks"),
+            "detail: {:?}",
+            report.detail
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deploy_batch_reports_frame_change_and_continues_after_rejection() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let (device, core) = setup(None);
@@ -264,11 +380,9 @@ async fn deploy_batch_reports_frame_change_and_continues_after_rejection() {
         assert!(results[2].frame_changed);
         assert!(results[2].skill_error.is_none());
         let tasks = core.tasks.lock().unwrap();
-        assert!(
-            tasks
-                .iter()
-                .any(|(_, t, p)| t == "SingleStep" && p["details"]["type"] == "SkillUsage")
-        );
+        assert!(tasks.iter().any(
+            |(_, t, p)| t == "SingleStep" && p["details"]["actions"][0]["type"] == "SkillUsage"
+        ));
     })
     .await
     .unwrap();
@@ -296,7 +410,10 @@ async fn start_paused_falls_back_to_task_completion_when_template_never_matches(
         std::fs::remove_file(&template_path).ok();
         assert!(report.ok, "report: {report:?}");
         assert_eq!(report.hud_detected, Some(false));
-        assert_eq!(report.fired_on.as_deref(), Some("start_step"));
+        assert_eq!(
+            report.fired_on.as_deref(),
+            Some("start_step_after_hud_grace")
+        );
         assert!(
             report
                 .detail
@@ -448,17 +565,107 @@ async fn is_paused_true_on_identical_frames_false_on_changing() {
         let (device, core) = setup(None);
         device.ensure_connected().await.unwrap();
         core.set_frames(frames(&[200, 7, 7, 7, 7]));
-        assert!(
-            battle::is_paused(&device, Duration::from_millis(10))
-                .await
-                .unwrap()
-        );
+        let v = battle::is_paused(&device, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(v.paused);
+        assert_eq!(v.method, "frames");
         core.set_frames(frames(&[200, 1, 2, 3, 4, 5]));
-        assert!(
-            !battle::is_paused(&device, Duration::from_millis(10))
-                .await
-                .unwrap()
+        let v = battle::is_paused(&device, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(!v.paused);
+        assert_eq!(v.method, "frames");
+    })
+    .await
+    .unwrap();
+}
+
+const HUD_FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/hud");
+
+fn setup_embedded_templates() -> (Arc<Device>, Arc<FakeCore>) {
+    let factory = FakeCoreFactory::new();
+    let core = factory.core.clone();
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            device_size: Some((1920, 1080)),
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, Arc::new(factory)).unwrap();
+    (registry.get(None).unwrap(), core)
+}
+
+fn frame_with_crop(crop_png: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let crop = image::load_from_memory(crop_png).unwrap().to_rgb8();
+    let mut img = image::RgbImage::new(1280, 720);
+    image::imageops::overlay(&mut img, &crop, 1180, 30);
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgb8(img.clone())
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut bgr = Vec::with_capacity(1280 * 720 * 3);
+    for px in img.pixels() {
+        bgr.push(px[2]);
+        bgr.push(px[1]);
+        bgr.push(px[0]);
+    }
+    (png, bgr)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn is_paused_reads_the_hud_icons_when_templates_exist() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup_embedded_templates();
+        device.ensure_connected().await.unwrap();
+        assert!(device.hud_template().unwrap().is_some());
+        assert!(device.paused_template().unwrap().is_some());
+
+        let running = frame_with_crop(
+            &std::fs::read(format!("{HUD_FIXTURES}/playcover_running.png")).unwrap(),
         );
+        core.set_frames(vec![running]);
+        let v = battle::is_paused(&device, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(!v.paused);
+        assert_eq!(v.method, "hud");
+        assert!(v.running_score.unwrap() >= 0.85, "verdict {v:?}");
+
+        let paused = frame_with_crop(
+            &std::fs::read(format!("{HUD_FIXTURES}/playcover_paused.png")).unwrap(),
+        );
+        core.set_frames(vec![paused]);
+        let v = battle::is_paused(&device, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(v.paused);
+        assert_eq!(v.method, "hud");
+        assert!(v.paused_score.unwrap() >= 0.85, "verdict {v:?}");
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn is_paused_falls_back_to_frames_when_the_icons_are_ambiguous() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (device, core) = setup_embedded_templates();
+        device.ensure_connected().await.unwrap();
+        // a formation frame matches neither icon -> digest comparison decides
+        let blank = frame_with_crop(
+            &std::fs::read(format!("{HUD_FIXTURES}/fixtures/formation_roi.png")).unwrap(),
+        );
+        core.set_frames(vec![blank.clone(), blank]);
+        let v = battle::is_paused(&device, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(v.paused);
+        assert_eq!(v.method, "frames");
+        assert!(v.running_score.is_some() && v.paused_score.is_some());
     })
     .await
     .unwrap();

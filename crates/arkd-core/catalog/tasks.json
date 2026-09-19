@@ -1171,7 +1171,7 @@
         },
         "details": {
           "type": "object",
-          "description": "Step payload; shape depends on subtype."
+          "description": "Step payload; shape depends on subtype: for 'action' this is {\"actions\": [...]} per MAA's copilot protocol; for 'stage' it is {\"stage_name\": \"...\"}; 'start' takes none."
         }
       },
       "required": [
@@ -1185,12 +1185,17 @@
       "type": "copilot",
       "subtype": "action",
       "details": {
-        "name": "Exusiai",
-        "location": [
-          5,
-          3
-        ],
-        "direction": "Left"
+        "actions": [
+          {
+            "type": "Deploy",
+            "name": "Exusiai",
+            "location": [
+              5,
+              3
+            ],
+            "direction": "Left"
+          }
+        ]
       }
     }
   },

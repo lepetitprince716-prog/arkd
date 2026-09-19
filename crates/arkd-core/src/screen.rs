@@ -37,6 +37,24 @@ impl Geometry {
         }
     }
 
+    /// Mirrors MaaCore's ControlScaleProxy: AsstAsyncClick takes coordinates in
+    /// MaaCore's normalised click frame (1280x720 for 16:9-or-wider devices),
+    /// not raw device pixels.
+    pub fn to_maacore(&self, x: f64, y: f64, space: CoordSpace) -> (i32, i32) {
+        let (dw, dh) = (self.device.0 as f64, self.device.1 as f64);
+        let (sw, sh) = (self.screenshot.0 as f64, self.screenshot.1 as f64);
+        let (dx, dy) = match space {
+            CoordSpace::Device => (x, y),
+            CoordSpace::Screenshot => (x * dw / sw, y * dh / sh),
+        };
+        let scale = if dw / dh >= 16.0 / 9.0 - 1e-7 {
+            720.0 / dh
+        } else {
+            1280.0 / dw
+        };
+        (round_half_even(dx * scale), round_half_even(dy * scale))
+    }
+
     pub fn to_screenshot(&self, x: f64, y: f64, space: CoordSpace) -> (i32, i32) {
         match space {
             CoordSpace::Screenshot => (round_half_even(x), round_half_even(y)),
@@ -105,6 +123,41 @@ pub fn encode_png(png: &[u8], opts: EncodeOpts) -> Result<Encoded> {
 pub fn encode_frame(frame: &Frame, opts: EncodeOpts) -> Result<Encoded> {
     let png = frame.to_png()?;
     encode_png(&png, opts)
+}
+
+pub fn encode_frame_normalised(
+    frame: &Frame,
+    target: (u32, u32),
+    opts: EncodeOpts,
+) -> Result<Encoded> {
+    let expected = frame.width as usize * frame.height as usize * 3;
+    if frame.bgr.len() != expected {
+        return Err(Error::Image(format!(
+            "frame dimensions {}x{} do not match {} bytes",
+            frame.width,
+            frame.height,
+            frame.bgr.len()
+        )));
+    }
+    let mut rgb = Vec::with_capacity(expected);
+    for px in frame.bgr.as_chunks::<3>().0 {
+        rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+    }
+    let img = image::RgbImage::from_raw(frame.width, frame.height, rgb).ok_or_else(|| {
+        Error::Image(format!(
+            "could not build a {}x{} image from {} bytes",
+            frame.width,
+            frame.height,
+            frame.bgr.len()
+        ))
+    })?;
+    let out_w = ((target.0 as f64) * opts.scale).round().max(1.0) as u32;
+    let out_h = ((target.1 as f64) * opts.scale).round().max(1.0) as u32;
+    let mut img = image::DynamicImage::ImageRgb8(img);
+    if (frame.width, frame.height) != (out_w, out_h) {
+        img = img.resize_exact(out_w, out_h, image::imageops::FilterType::Triangle);
+    }
+    encode_dynamic(&img, opts)
 }
 
 fn encode_dynamic(img: &image::DynamicImage, opts: EncodeOpts) -> Result<Encoded> {

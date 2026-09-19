@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    path::PathBuf,
     sync::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
@@ -24,6 +25,7 @@ pub struct Device {
     pub session: MaaSession,
     playtools: Mutex<Option<PlayToolsClient>>,
     hud: OnceLock<Result<Option<HudTemplate>>>,
+    hud_paused: OnceLock<Result<Option<HudTemplate>>>,
     action_lock: Mutex<()>,
     connect_lock: Mutex<()>,
     busy: AtomicBool,
@@ -75,32 +77,117 @@ impl Device {
         Ok(guard)
     }
 
-    pub async fn geometry(&self) -> Result<Geometry> {
+    pub async fn geometry_info(&self) -> Result<GeometryInfo> {
         let screenshot = self.config.screenshot_size;
         if let Some(device) = self.config.device_size {
-            return Ok(Geometry { device, screenshot });
+            return Ok(GeometryInfo {
+                geometry: Geometry { device, screenshot },
+                source: "config",
+            });
+        }
+        if let Some(device) = self.session.resolution() {
+            return Ok(GeometryInfo {
+                geometry: Geometry { device, screenshot },
+                source: "maacore",
+            });
+        }
+        if matches!(self.config.kind, DeviceKind::Playtools { .. }) {
+            let guard = self.playtools().await?;
+            if let Some(client) = guard.as_ref() {
+                let (w, h) = client.size();
+                return Ok(GeometryInfo {
+                    geometry: Geometry {
+                        device: (w as u32, h as u32),
+                        screenshot,
+                    },
+                    source: "playtools",
+                });
+            }
+        }
+        Err(Error::Validation(format!(
+            "device size unknown for {}: connect the device first or set devices[].device_size",
+            self.name
+        )))
+    }
+
+    pub async fn geometry(&self) -> Result<Geometry> {
+        Ok(self.geometry_info().await?.geometry)
+    }
+
+    pub async fn geometry_hint(&self) -> Option<GeometryInfo> {
+        let screenshot = self.config.screenshot_size;
+        if let Some(device) = self.config.device_size {
+            return Some(GeometryInfo {
+                geometry: Geometry { device, screenshot },
+                source: "config",
+            });
+        }
+        if let Some(device) = self.session.resolution() {
+            return Some(GeometryInfo {
+                geometry: Geometry { device, screenshot },
+                source: "maacore",
+            });
         }
         if let Ok(guard) = self.playtools.try_lock()
             && let Some(client) = guard.as_ref()
         {
             let (w, h) = client.size();
-            return Ok(Geometry {
-                device: (w as u32, h as u32),
-                screenshot,
+            return Some(GeometryInfo {
+                geometry: Geometry {
+                    device: (w as u32, h as u32),
+                    screenshot,
+                },
+                source: "playtools",
             });
         }
-        Ok(Geometry {
-            device: screenshot,
-            screenshot,
-        })
+        None
+    }
+
+    fn load_hud(
+        &self,
+        path: Option<&PathBuf>,
+        embedded: &'static [u8],
+    ) -> Result<Option<HudTemplate>> {
+        match path {
+            Some(path) if path.as_os_str() == "none" => Ok(None),
+            Some(path) => HudTemplate::load(
+                path,
+                self.config.hud_roi,
+                self.config.screenshot_size,
+                self.config.hud_threshold,
+            )
+            .map(Some),
+            None if matches!(self.config.kind, DeviceKind::Playtools { .. })
+                && self.config.hud_roi == DeviceConfig::default().hud_roi =>
+            {
+                HudTemplate::from_png(
+                    embedded,
+                    EMBEDDED_HUD_ROI,
+                    EMBEDDED_HUD_SPACE,
+                    self.config.hud_threshold,
+                )
+                .map(Some)
+            }
+            None => Ok(None),
+        }
     }
 
     pub fn hud_template(&self) -> Result<Option<&HudTemplate>> {
-        let loaded = self.hud.get_or_init(|| match &self.config.hud_template {
-            Some(path) => {
-                HudTemplate::load(path, self.config.hud_roi, self.config.hud_threshold).map(Some)
-            }
-            None => Ok(None),
+        let loaded = self
+            .hud
+            .get_or_init(|| self.load_hud(self.config.hud_template.as_ref(), EMBEDDED_HUD));
+        match loaded {
+            Ok(v) => Ok(v.as_ref()),
+            Err(e) => Err(Error::Image(format!("HUD template unavailable: {e}"))),
+        }
+    }
+
+    pub fn paused_template(&self) -> Result<Option<&HudTemplate>> {
+        let loaded = self.hud_paused.get_or_init(|| {
+            self.load_hud(
+                self.config.hud_paused_template.as_ref(),
+                EMBEDDED_PAUSED_HUD,
+            )
         });
         match loaded {
             Ok(v) => Ok(v.as_ref()),
@@ -139,6 +226,16 @@ impl Device {
     }
 }
 
+pub struct GeometryInfo {
+    pub geometry: Geometry,
+    pub source: &'static str,
+}
+
+const EMBEDDED_HUD: &[u8] = include_bytes!("../assets/hud/playcover_running.png");
+const EMBEDDED_PAUSED_HUD: &[u8] = include_bytes!("../assets/hud/playcover_paused.png");
+const EMBEDDED_HUD_ROI: (u32, u32, u32, u32) = (1180, 30, 60, 50);
+const EMBEDDED_HUD_SPACE: (u32, u32) = (1280, 720);
+
 pub struct DeviceSummary {
     pub name: String,
     pub kind: String,
@@ -167,6 +264,7 @@ impl DeviceRegistry {
                 session,
                 playtools: Mutex::new(None),
                 hud: OnceLock::new(),
+                hud_paused: OnceLock::new(),
                 action_lock: Mutex::new(()),
                 connect_lock: Mutex::new(()),
                 busy: AtomicBool::new(false),

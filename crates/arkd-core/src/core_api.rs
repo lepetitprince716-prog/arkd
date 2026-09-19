@@ -360,6 +360,7 @@ pub mod fake {
         pub tasks: Mutex<Vec<(i32, String, serde_json::Value)>>,
         connected: Mutex<bool>,
         running: Mutex<bool>,
+        resolution: Mutex<(u32, u32)>,
         next_task_id: Mutex<i32>,
         connect_ok: Mutex<bool>,
         append_ok: Mutex<bool>,
@@ -372,6 +373,7 @@ pub mod fake {
         frame_cursor: Mutex<usize>,
         click_hook: Mutex<Option<ClickHook>>,
         auto_finish: Mutex<Option<std::time::Duration>>,
+        running_clear_delay: Mutex<Option<std::time::Duration>>,
         running_hook: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     }
 
@@ -394,6 +396,7 @@ pub mod fake {
                 tasks: Mutex::new(Vec::new()),
                 connected: Mutex::new(false),
                 running: Mutex::new(false),
+                resolution: Mutex::new((1920, 1080)),
                 next_task_id: Mutex::new(1),
                 connect_ok: Mutex::new(true),
                 append_ok: Mutex::new(true),
@@ -406,6 +409,7 @@ pub mod fake {
                 frame_cursor: Mutex::new(0),
                 click_hook: Mutex::new(None),
                 auto_finish: Mutex::new(None),
+                running_clear_delay: Mutex::new(None),
                 running_hook: Mutex::new(None),
             }
         }
@@ -427,6 +431,10 @@ pub mod fake {
 
         pub fn set_running(&self, v: bool) {
             *self.running.lock().unwrap() = v;
+        }
+
+        pub fn set_resolution(&self, w: u32, h: u32) {
+            *self.resolution.lock().unwrap() = (w, h);
         }
 
         pub fn set_connect_ok(&self, v: bool) {
@@ -474,6 +482,10 @@ pub mod fake {
             *self.auto_finish.lock().unwrap() = Some(after);
         }
 
+        pub fn set_running_clear_delay(&self, d: std::time::Duration) {
+            *self.running_clear_delay.lock().unwrap() = Some(d);
+        }
+
         pub fn set_running_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
             *self.running_hook.lock().unwrap() = Some(hook);
         }
@@ -493,11 +505,21 @@ pub mod fake {
                     serde_json::json!({"taskchain": task_type, "taskid": id, "uuid": "fake-uuid"}),
                 );
             }
-            *self.running.lock().unwrap() = false;
+            let delay = *self.running_clear_delay.lock().unwrap();
+            if delay.is_none() {
+                *self.running.lock().unwrap() = false;
+            }
             self.emit(
                 3,
                 serde_json::json!({"taskchain": "", "uuid": "fake-uuid", "finished_tasks": finished}),
             );
+            if let Some(d) = delay {
+                let core = self.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(d);
+                    *core.running.lock().unwrap() = false;
+                });
+            }
         }
     }
 
@@ -532,6 +554,11 @@ pub mod fake {
                 2,
                 serde_json::json!({"what": "Connected", "uuid": "fake-uuid", "details": {"address": address}}),
             );
+            let (w, h) = *self.resolution.lock().unwrap();
+            self.emit(
+                2,
+                serde_json::json!({"what": "ResolutionInfo", "uuid": "fake-uuid", "details": {"width": w, "height": h}}),
+            );
             Ok(())
         }
 
@@ -550,11 +577,20 @@ pub mod fake {
                     return Ok(0);
                 }
             }
+            let params: serde_json::Value =
+                serde_json::from_str(params_json).unwrap_or(serde_json::Value::Null);
+            if task_type == "SingleStep"
+                && params.get("subtype").and_then(|v| v.as_str()) == Some("action")
+                && !params
+                    .get("details")
+                    .and_then(|d| d.get("actions"))
+                    .is_some_and(|a| a.is_array())
+            {
+                return Ok(0);
+            }
             let mut next = self.next_task_id.lock().unwrap();
             let id = *next;
             *next += 1;
-            let params: serde_json::Value =
-                serde_json::from_str(params_json).unwrap_or(serde_json::Value::Null);
             self.tasks
                 .lock()
                 .unwrap()

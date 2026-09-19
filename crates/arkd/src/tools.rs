@@ -554,6 +554,19 @@ impl ArkdServer {
         let status = run(move || Ok(session.status())).await?;
         let mut v = serde_json::to_value(status)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        match device.geometry_hint().await {
+            Some(g) => {
+                v["geometry"] = json!({
+                    "device": [g.geometry.device.0, g.geometry.device.1],
+                    "screenshot": [g.geometry.screenshot.0, g.geometry.screenshot.1],
+                    "source": g.source,
+                });
+            }
+            None => {
+                v["geometry"] = json!(null);
+                v["geometry_source"] = json!("unknown");
+            }
+        }
         v["device"] = json!(device.name);
         v["busy"] = json!(device.is_busy());
         v["uptime_seconds"] = json!(self.state.started_at.elapsed().as_secs_f64());
@@ -1046,10 +1059,13 @@ impl ArkdServer {
                 .as_mut()
                 .ok_or_else(|| ErrorData::internal_error("PlayTools client unavailable", None))?;
             let frame = client.capture().await.map_err(tool_error)?;
-            tokio::task::spawn_blocking(move || screen::encode_frame(&frame, opts))
-                .await
-                .map_err(|e| ErrorData::internal_error(format!("encode failed: {e}"), None))?
-                .map_err(tool_error)?
+            let target = device.config.screenshot_size;
+            tokio::task::spawn_blocking(move || {
+                screen::encode_frame_normalised(&frame, target, opts)
+            })
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("encode failed: {e}"), None))?
+            .map_err(tool_error)?
         } else {
             let session = device.session.clone();
             let fresh = p.fresh;
@@ -1098,6 +1114,7 @@ impl ArkdServer {
         let use_playtools = self.via_is_playtools(&device, &p.via)?;
         let geometry = device.geometry().await.map_err(tool_error)?;
         let (dx, dy) = geometry.to_device(p.x, p.y, space);
+        let (cx, cy) = geometry.to_maacore(p.x, p.y, space);
         let dx_u16 = to_u16(dx, "x")?;
         let dy_u16 = to_u16(dy, "y")?;
         let via_name = if use_playtools {
@@ -1117,7 +1134,7 @@ impl ArkdServer {
                         .await?;
                 } else {
                     let session = device.session.clone();
-                    tokio::task::spawn_blocking(move || session.click(dx, dy))
+                    tokio::task::spawn_blocking(move || session.click(cx, cy))
                         .await
                         .map_err(|e| Error::CoreLoad(format!("click task failed: {e}")))??;
                 }
@@ -1125,12 +1142,17 @@ impl ArkdServer {
             })
             .await
             .map_err(tool_error)?;
-        json_result(json!({
+        let mut out = json!({
             "ok": true,
             "device_x": dx,
             "device_y": dy,
             "via": via_name,
-        }))
+        });
+        if !use_playtools {
+            out["core_x"] = json!(cx);
+            out["core_y"] = json!(cy);
+        }
+        json_result(out)
     }
 
     #[tool(
@@ -1327,14 +1349,14 @@ impl ArkdServer {
         let device = self.device(p.device.as_ref())?;
         let session = device.session.clone();
         let task = device
-            .with_blocking_action(move || session.single_step("action", Some(details)))
+            .with_blocking_action(move || session.single_action(details))
             .await
             .map_err(tool_error)?;
         json_result(task.describe())
     }
 
     #[tool(
-        description = "Enter a stage and pause the battle as soon as the field renders: runs the MaaCore 'stage' and 'start' steps and clicks pause for you, all inside this daemon (the battle context only exists in this process). Inspect the returned frame, then deploy with battle_deploy_batch while paused and let the fight run with battle_resume_until. Do not reproduce this with battle_start + screen_tap yourself -- the timing window is easy to miss."
+        description = "Enter a stage and pause the battle as soon as the field renders: runs the MaaCore 'stage' and 'start' steps and clicks pause for you, all inside this daemon (the battle context only exists in this process). Call it with the game already on the stage's formation (squad) screen -- the stage step loads the tile map but does not navigate; use the stage's 演习 (practice) entry when the fight must not cost sanity. Inspect the returned frame, then deploy with battle_deploy_batch while paused and let the fight run with battle_resume_until. Do not reproduce this with battle_start + screen_tap yourself -- the timing window is easy to miss."
     )]
     async fn battle_start_paused(
         &self,
@@ -1466,11 +1488,16 @@ impl ArkdServer {
         Parameters(p): Parameters<DeviceParam>,
     ) -> Result<Json<Value>, ErrorData> {
         let device = self.device(p.device.as_ref())?;
-        let paused = device
+        let verdict = device
             .with_action(|| battle::is_paused(&device, battle::PAUSE_GAP))
             .await
             .map_err(tool_error)?;
-        json_result(json!({"paused": paused}))
+        json_result(json!({
+            "paused": verdict.paused,
+            "method": verdict.method,
+            "running_score": verdict.running_score,
+            "paused_score": verdict.paused_score,
+        }))
     }
 }
 

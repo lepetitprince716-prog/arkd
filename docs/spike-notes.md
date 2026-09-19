@@ -12,11 +12,35 @@ Resource: `/Applications/MAA.app/Contents/Resources` (parent of `resource/`). Us
 | resource | PASS | `set_user_dir` + `load_resource`, 479 ms |
 | callback | PASS | instance created and dropped, no crash; 1 callback received during create/drop |
 | two-instances | PASS | two `Assistant`s alive simultaneously, both dropped cleanly |
-| connect | SKIP | `127.0.0.1:1717` not listening — game/MaaTools not running at spike time |
-| playtools-concurrent | SKIP | same reason |
-| hud-sample | SKIP | needs formation screen + game running |
+| connect | PASS | `AsstAsyncConnect` 67 ms; MaaCore screencap 30–105 ms; click 230–239 ms |
+| playtools-concurrent | PASS | PlayTools VERN=4, SIZE=1920×1080; direct BGR capture works while MaaCore holds its connection (frame arrives as the Retina backing store, 2956×1662 — arkd normalises it to screenshot space) |
+| hud-sample | PASS | embedded PlayCover HUD template (⏸ ROI) now ships as the `playtools` default |
 
-Connect-path numbers are pending a live game; rerun `cargo run -p arkd-core --example spike -- connect` with MaaTools on `:1717`.
+## Live numbers (2026-09-19, MaaCore v6.17.5 + PlayCover)
+
+- `SingleStep stage` completes instantly — it only loads the tile map, no navigation.
+- `SingleStep start` (BattleStartAll) ≈ 6 s.
+- `subtype: "action"` details must be `{"actions": [...]}`; a bare action object
+  makes `AsstAppendTask` return 0.
+- MaaCore click space (`AsstAsyncClick`) is its normalised 1280×720 frame, not
+  device pixels (ControlScaleProxy scales by `device_height/720` for 16:9+).
+- MaaCore emits completion callbacks *before* clearing `AsstRunning` — callers
+  must wait out a short grace before starting the next step.
+- MacBGR: measured. 10-frame MaaCore `Screencap` cost — `General` avg 28.7 ms
+  (range 22–43 ms) vs `MacBGR` avg 30.8 ms (range 20–49 ms); colours correct on
+  both. No measurable difference on this Mac — the default stays `General`.
+
+## A5 live run (2026-09-19)
+
+`battle start-paused` → `deploy` → `resume_until` against LS-1 on real
+MaaCore v6.17.5 + PlayCover:
+
+- `start_paused`: fired on the HUD template (`hud_score` 0.98), `pause_attempts`
+  2, 11.4 s end to end.
+- `deploy_batch` 塞雷娅 at (7,4): `frame_changed: true` after 4.1 s.
+- `resume_until` 12 s: `timeout_paused` — battle resumed and stayed live.
+- The abandon dialog showed 理智 +0 — the whole drill ran through the 演习
+  entry, costing no sanity.
 
 ## API facts confirmed against maa-cli @ aebb5e9
 

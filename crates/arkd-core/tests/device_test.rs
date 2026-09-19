@@ -161,7 +161,70 @@ async fn geometry_uses_an_already_connected_playtools_client() {
 }
 
 #[tokio::test]
-async fn geometry_falls_back_to_screenshot_size_without_a_socket() {
+async fn geometry_prefers_maacore_resolution_over_playtools() {
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            // unreachable on purpose: the ResolutionInfo callback must win
+            kind: DeviceKind::Playtools {
+                address: "127.0.0.1:1".to_string(),
+            },
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    device.ensure_connected().await.unwrap();
+    let info = device.geometry_info().await.unwrap();
+    assert_eq!(info.geometry.device, (1920, 1080));
+    assert_eq!(info.source, "maacore");
+}
+
+#[tokio::test]
+async fn geometry_reports_config_as_its_source() {
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            device_size: Some((1920, 1080)),
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    let info = device.geometry_info().await.unwrap();
+    assert_eq!(info.geometry.device, (1920, 1080));
+    assert_eq!(info.source, "config");
+}
+
+#[tokio::test]
+async fn embedded_hud_templates_match_the_default_geometry() {
+    let defaults = DeviceConfig::default();
+    assert_eq!(defaults.hud_roi, (1180, 30, 60, 50));
+    assert_eq!(defaults.screenshot_size, (1280, 720));
+
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    assert!(device.hud_template().unwrap().is_some());
+    assert!(device.paused_template().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn geometry_errors_without_device_size_or_any_source() {
     let factory = Arc::new(FakeCoreFactory::new());
     let config = Config {
         devices: vec![DeviceConfig {
@@ -176,6 +239,6 @@ async fn geometry_falls_back_to_screenshot_size_without_a_socket() {
     };
     let registry = DeviceRegistry::from_config(&config, factory).unwrap();
     let device = registry.get(None).unwrap();
-    let geo = device.geometry().await.unwrap();
-    assert_eq!(geo.device, (1280, 720));
+    // not connected and the PlayTools socket refuses: no silent 1:1 fallback
+    assert!(device.geometry().await.is_err());
 }

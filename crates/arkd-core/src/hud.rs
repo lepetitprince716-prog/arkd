@@ -79,15 +79,22 @@ fn ncc(template: &[f32], patch: &[f32]) -> f64 {
 }
 
 impl HudTemplate {
-    pub fn from_png(bytes: &[u8], roi: (u32, u32, u32, u32), threshold: f64) -> Result<Self> {
+    /// `space` is the frame size `roi` is expressed in (the configured
+    /// screenshot size). A PNG whose dimensions equal `(roi.w, roi.h)` is
+    /// already the ROI crop; anything larger is treated as a full frame the
+    /// ROI is cropped out of.
+    pub fn from_png(
+        bytes: &[u8],
+        roi: (u32, u32, u32, u32),
+        space: (u32, u32),
+        threshold: f64,
+    ) -> Result<Self> {
         let img = image::load_from_memory(bytes)
             .map_err(|e| Error::Image(format!("could not decode HUD template PNG: {e}")))?;
         let (src_w, src_h) = (img.width(), img.height());
         let (x, y, w, h) = roi;
-        if x + w > src_w || y + h > src_h || w == 0 || h == 0 {
-            return Err(Error::Validation(format!(
-                "HUD ROI {roi:?} does not fit inside a {src_w}x{src_h} image"
-            )));
+        if w == 0 || h == 0 {
+            return Err(Error::Validation(format!("HUD ROI {roi:?} is empty")));
         }
         let rgb = img.to_rgb8();
         let mut bgr = Vec::with_capacity((src_w * src_h * 3) as usize);
@@ -96,10 +103,19 @@ impl HudTemplate {
             bgr.push(px[1]);
             bgr.push(px[0]);
         }
-        let gray = crop_gray_bgr(&bgr, src_w, roi);
+        let (src, gray) = if (src_w, src_h) == (w, h) {
+            (space, crop_gray_bgr(&bgr, src_w, (0, 0, src_w, src_h)))
+        } else {
+            if x + w > src_w || y + h > src_h {
+                return Err(Error::Validation(format!(
+                    "HUD ROI {roi:?} does not fit inside a {src_w}x{src_h} image"
+                )));
+            }
+            ((src_w, src_h), crop_gray_bgr(&bgr, src_w, roi))
+        };
         Ok(Self {
             roi,
-            src: (src_w, src_h),
+            src,
             gray,
             w,
             h,
@@ -107,14 +123,23 @@ impl HudTemplate {
         })
     }
 
-    pub fn load(path: &Path, roi: (u32, u32, u32, u32), threshold: f64) -> Result<Self> {
+    pub fn load(
+        path: &Path,
+        roi: (u32, u32, u32, u32),
+        space: (u32, u32),
+        threshold: f64,
+    ) -> Result<Self> {
         let bytes = std::fs::read(path).map_err(|e| {
             Error::Image(format!(
                 "could not read HUD template {}: {e}",
                 path.display()
             ))
         })?;
-        Self::from_png(&bytes, roi, threshold)
+        Self::from_png(&bytes, roi, space, threshold)
+    }
+
+    pub fn threshold(&self) -> f64 {
+        self.threshold
     }
 
     pub fn score(&self, frame: &BgrFrame) -> Result<f64> {

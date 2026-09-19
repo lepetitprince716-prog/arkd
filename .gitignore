@@ -8,3 +8,4 @@
 /state/
 /.devin/capabilities.md
 /.claude/capabilities.md
+!crates/arkd-core/assets/**/*.png

@@ -38,7 +38,8 @@ all path values.
 | `device_size` | playtools size / `screenshot_size` | Physical device pixels; screenshots scale to it for taps. |
 | `pause_button_screenshot` | `[1210, 55]` | Battle pause button in screenshot space (→ device `(1815, 82)` at 1920×1080). |
 | `client_type` | `Official` | MaaCore client flavour. |
-| `hud_template` | none | Optional PNG used to detect the battle HUD early in `battle_start_paused`. The file is the whole frame; the ROI below is cropped out of it. |
+| `hud_template` | embedded PlayCover template (`playtools` kind only) | PNG of the running battle HUD icon (⏸) used to detect the battle HUD in `battle_start_paused` and `battle_is_paused`. The file may be the whole frame (the ROI below is cropped out of it) or already the ROI crop. `"none"` disables it; `adb` devices have no default template. |
+| `hud_paused_template` | embedded PlayCover template (`playtools` kind only) | PNG of the paused battle HUD icon (▶), scored in the same `hud_roi`/`hud_threshold` and used alongside `hud_template` for icon-based pause detection. `"none"` disables it; `adb` devices have no default template. |
 | `hud_roi` | `[1180, 30, 60, 50]` | `(x, y, w, h)` region of the screenshot that carries the HUD template. |
 | `hud_threshold` | `0.85` | Normalised-correlation score at or above which the HUD counts as matched. |
 

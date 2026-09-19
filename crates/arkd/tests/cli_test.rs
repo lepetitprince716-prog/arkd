@@ -139,7 +139,7 @@ async fn cli_talks_to_a_fake_daemon() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_eq!(*core.clicks.lock().unwrap(), vec![(1815, 82)]);
+    assert_eq!(*core.clicks.lock().unwrap(), vec![(1210, 55)]);
 
     let out = arkd(&["task", "types", "--url", &url]);
     assert!(
@@ -149,6 +149,52 @@ async fn cli_talks_to_a_fake_daemon() {
     );
     let v: Value = serde_json::from_str(stdout(&out).trim()).unwrap();
     assert!(v["task_types"].as_array().unwrap().len() > 10);
+
+    let frame = arkd_core::playtools::Frame {
+        width: 1280,
+        height: 720,
+        bgr: vec![64u8; 1280 * 720 * 3],
+    };
+    let png = frame.to_png().unwrap();
+    core.set_frames(vec![(png.clone(), frame.bgr.clone()), (png, frame.bgr)]);
+
+    let shot = dir.path().join("pause.png");
+    let out = arkd(&[
+        "battle",
+        "pause",
+        "-o",
+        shot.to_str().unwrap(),
+        "--url",
+        &url,
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let printed = stdout(&out);
+    assert!(printed.contains("\"method\": \"frames\""), "{printed}");
+    let (w, h) = arkd_core::screen::png_dimensions(&std::fs::read(&shot).unwrap()).unwrap();
+    assert_eq!((w, h), (1280, 720), "-o without --scale is full size");
+
+    let shot = dir.path().join("pause-small.png");
+    let out = arkd(&[
+        "battle",
+        "pause",
+        "-o",
+        shot.to_str().unwrap(),
+        "--scale",
+        "0.5",
+        "--url",
+        &url,
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (w, h) = arkd_core::screen::png_dimensions(&std::fs::read(&shot).unwrap()).unwrap();
+    assert_eq!((w, h), (640, 360), "explicit --scale is honoured");
 
     serve.abort();
 }

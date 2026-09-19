@@ -245,13 +245,20 @@ enum BattleCommand {
         #[command(flatten)]
         opts: ClientOpts,
     },
-    #[command(about = "Enter a stage and pause as soon as the field renders")]
+    #[command(
+        about = "Enter a stage and pause as soon as the field renders; call it on the stage's formation screen (use the 演习 entry for a zero-sanity drill)"
+    )]
     StartPaused {
         stage: String,
         #[arg(long, default_value_t = 60, help = "Timeout in seconds (5..=300)")]
         timeout: u32,
         #[arg(short, long, help = "Save the paused frame to a PNG")]
         output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Frame scale 0.1..=1.0 (defaults to 1.0 when -o is given)"
+        )]
+        scale: Option<f64>,
         #[command(flatten)]
         opts: ClientOpts,
     },
@@ -273,6 +280,11 @@ enum BattleCommand {
         seconds: u32,
         #[arg(short, long, help = "Save the final frame to a PNG")]
         output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Frame scale 0.1..=1.0 (defaults to 1.0 when -o is given)"
+        )]
+        scale: Option<f64>,
         #[command(flatten)]
         opts: ClientOpts,
     },
@@ -280,6 +292,11 @@ enum BattleCommand {
     Pause {
         #[arg(short, long, help = "Save the paused frame to a PNG")]
         output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Frame scale 0.1..=1.0 (defaults to 1.0 when -o is given)"
+        )]
+        scale: Option<f64>,
         #[command(flatten)]
         opts: ClientOpts,
     },
@@ -589,15 +606,14 @@ async fn run_battle(cmd: BattleCommand) -> anyhow::Result<()> {
             stage,
             timeout,
             output,
+            scale,
             opts,
         } => {
-            run_tool_frame(
-                &opts,
-                "battle_start_paused",
-                json!({"stage": stage, "timeout_seconds": timeout}),
-                output.as_deref(),
-            )
-            .await
+            let mut args = json!({"stage": stage, "timeout_seconds": timeout});
+            if let Some(s) = scale.or_else(|| output.as_ref().map(|_| 1.0)) {
+                args["scale"] = json!(s);
+            }
+            run_tool_frame(&opts, "battle_start_paused", args, output.as_deref()).await
         }
         BattleCommand::Deploy {
             plan,
@@ -621,18 +637,25 @@ async fn run_battle(cmd: BattleCommand) -> anyhow::Result<()> {
         BattleCommand::Resume {
             seconds,
             output,
+            scale,
             opts,
         } => {
-            run_tool_frame(
-                &opts,
-                "battle_resume_until",
-                json!({"seconds": seconds}),
-                output.as_deref(),
-            )
-            .await
+            let mut args = json!({"seconds": seconds});
+            if let Some(s) = scale.or_else(|| output.as_ref().map(|_| 1.0)) {
+                args["scale"] = json!(s);
+            }
+            run_tool_frame(&opts, "battle_resume_until", args, output.as_deref()).await
         }
-        BattleCommand::Pause { output, opts } => {
-            run_tool_frame(&opts, "battle_pause", json!({}), output.as_deref()).await
+        BattleCommand::Pause {
+            output,
+            scale,
+            opts,
+        } => {
+            let mut args = json!({});
+            if let Some(s) = scale.or_else(|| output.as_ref().map(|_| 1.0)) {
+                args["scale"] = json!(s);
+            }
+            run_tool_frame(&opts, "battle_pause", args, output.as_deref()).await
         }
         BattleCommand::IsPaused { opts } => run_tool(&opts, "battle_is_paused", json!({})).await,
     }

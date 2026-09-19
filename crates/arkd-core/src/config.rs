@@ -48,6 +48,7 @@ pub struct DeviceConfig {
     pub pause_button_screenshot: (u32, u32),
     pub client_type: String,
     pub hud_template: Option<PathBuf>,
+    pub hud_paused_template: Option<PathBuf>,
     pub hud_roi: (u32, u32, u32, u32),
     pub hud_threshold: f64,
 }
@@ -133,6 +134,7 @@ impl Default for DeviceConfig {
             pause_button_screenshot: (1210, 55),
             client_type: "Official".to_string(),
             hud_template: None,
+            hud_paused_template: None,
             hud_roi: (1180, 30, 60, 50),
             hud_threshold: 0.85,
         }
@@ -311,6 +313,7 @@ impl Config {
         self.job_dir = self.job_dir.as_ref().map(|p| expand_tilde(p));
         for d in &mut self.devices {
             d.hud_template = d.hud_template.as_ref().map(|p| expand_tilde(p));
+            d.hud_paused_template = d.hud_paused_template.as_ref().map(|p| expand_tilde(p));
         }
     }
 

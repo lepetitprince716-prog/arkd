@@ -155,6 +155,7 @@ struct State {
     events: EventLog,
     tasks: BTreeMap<i32, QueuedTask>,
     connection: Option<ConnectionInfo>,
+    resolution: Option<(u32, u32)>,
     last_error: Option<String>,
     battle: BattleState,
     frame_dims: Option<(u32, u32)>,
@@ -204,6 +205,7 @@ impl MaaSession {
                 events: EventLog::new(max_events.max(1)),
                 tasks: BTreeMap::new(),
                 connection: None,
+                resolution: None,
                 last_error: None,
                 battle: BattleState::default(),
                 frame_dims: None,
@@ -303,6 +305,15 @@ impl MaaSession {
                 "ConnectFailed" | "Disconnect" => {
                     st.connection = None;
                 }
+                "ResolutionInfo" => {
+                    let details = payload.get("details").cloned().unwrap_or(json!({}));
+                    if let (Some(w), Some(h)) = (
+                        details.get("width").and_then(|v| v.as_u64()),
+                        details.get("height").and_then(|v| v.as_u64()),
+                    ) {
+                        st.resolution = Some((w as u32, h as u32));
+                    }
+                }
                 _ => {}
             }
             if CONNECTION_FAILURES.contains(&what) {
@@ -380,6 +391,10 @@ impl MaaSession {
 
     pub fn connection(&self) -> Option<ConnectionInfo> {
         self.inner.state.lock().unwrap().connection.clone()
+    }
+
+    pub fn resolution(&self) -> Option<(u32, u32)> {
+        self.inner.state.lock().unwrap().resolution
     }
 
     pub fn require_connection(&self) -> Result<()> {
@@ -524,9 +539,20 @@ impl MaaSession {
         })
     }
 
+    fn wait_until_idle(&self, grace: Duration) -> bool {
+        let deadline = Instant::now() + grace;
+        while self.inner.core.running() {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        true
+    }
+
     pub fn single_step(&self, subtype: &str, details: Option<Value>) -> Result<QueuedTask> {
         self.require_connection()?;
-        if self.inner.core.running() {
+        if self.inner.core.running() && !self.wait_until_idle(Duration::from_millis(750)) {
             return Err(Error::Validation(
                 "MaaCore is already running a task, and AsstStart refuses to start another. SingleStep drives a battle yourself instead of alongside a Copilot task -- call maa_stop first.".to_string(),
             ));
@@ -538,6 +564,10 @@ impl MaaSession {
         let task = self.append_task("SingleStep", params)?;
         self.start()?;
         Ok(task)
+    }
+
+    pub fn single_action(&self, action: Value) -> Result<QueuedTask> {
+        self.single_step("action", Some(json!({"actions": [action]})))
     }
 
     pub fn back_to_home(&self) -> Result<()> {

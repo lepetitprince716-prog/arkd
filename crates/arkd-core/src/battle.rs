@@ -7,7 +7,7 @@ use crate::device::Device;
 use crate::error::{Error, Result};
 use crate::playtools::Frame;
 use crate::screen::{CoordSpace, EncodeOpts, ImageFormat, encode_frame};
-use crate::session::{BgrFrame, DEFAULT_STALL, WaitCondition, frame_digest};
+use crate::session::{BgrFrame, DEFAULT_STALL, QueuedTask, WaitCondition, frame_digest};
 
 pub const PAUSE_GAP: Duration = Duration::from_millis(1200);
 
@@ -34,10 +34,10 @@ fn digest(frame: &BgrFrame) -> u64 {
     frame_digest(&frame.data)
 }
 
-async fn pause_button_device(device: &Device) -> Result<(i32, i32)> {
+async fn pause_button_core(device: &Device) -> Result<(i32, i32)> {
     let (x, y) = device.config.pause_button_screenshot;
     let g = device.geometry().await?;
-    Ok(g.to_device(x as f64, y as f64, CoordSpace::Screenshot))
+    Ok(g.to_maacore(x as f64, y as f64, CoordSpace::Screenshot))
 }
 
 async fn click(device: &Device, x: i32, y: i32) -> Result<()> {
@@ -46,7 +46,7 @@ async fn click(device: &Device, x: i32, y: i32) -> Result<()> {
 }
 
 async fn click_pause(device: &Device) -> Result<()> {
-    let (x, y) = pause_button_device(device).await?;
+    let (x, y) = pause_button_core(device).await?;
     click(device, x, y).await
 }
 
@@ -80,18 +80,7 @@ impl StepOutcome {
     }
 }
 
-async fn run_step(
-    device: &Device,
-    subtype: &str,
-    details: Option<Value>,
-    timeout: Duration,
-) -> StepOutcome {
-    let session = device.session.clone();
-    let subtype = subtype.to_string();
-    let task = match spawn(move || session.single_step(&subtype, details)).await {
-        Ok(t) => t,
-        Err(e) => return StepOutcome::Rejected(e.to_string()),
-    };
+async fn wait_step(device: &Device, task: QueuedTask, timeout: Duration) -> StepOutcome {
     let outcome = device
         .session
         .wait(
@@ -113,11 +102,73 @@ async fn run_step(
     }
 }
 
-pub async fn is_paused(device: &Device, gap: Duration) -> Result<bool> {
+async fn run_step(
+    device: &Device,
+    subtype: &str,
+    details: Option<Value>,
+    timeout: Duration,
+) -> StepOutcome {
+    let session = device.session.clone();
+    let subtype = subtype.to_string();
+    let task = match spawn(move || session.single_step(&subtype, details)).await {
+        Ok(t) => t,
+        Err(e) => return StepOutcome::Rejected(e.to_string()),
+    };
+    wait_step(device, task, timeout).await
+}
+
+async fn run_action(device: &Device, action: Value, timeout: Duration) -> StepOutcome {
+    let session = device.session.clone();
+    let task = match spawn(move || session.single_action(action)).await {
+        Ok(t) => t,
+        Err(e) => return StepOutcome::Rejected(e.to_string()),
+    };
+    wait_step(device, task, timeout).await
+}
+
+#[derive(Debug, Serialize)]
+pub struct PauseVerdict {
+    pub paused: bool,
+    pub method: &'static str,
+    pub running_score: Option<f64>,
+    pub paused_score: Option<f64>,
+}
+
+pub async fn is_paused(device: &Device, gap: Duration) -> Result<PauseVerdict> {
+    let run_template = device.hud_template()?;
+    let paused_template = device.paused_template()?;
     let first = capture_bgr(device).await?;
+    let (mut running_score, mut paused_score) = (None, None);
+    if let (Some(run), Some(pau)) = (run_template, paused_template) {
+        let rs = run.score(&first)?;
+        let ps = pau.score(&first)?;
+        running_score = Some(rs);
+        paused_score = Some(ps);
+        if ps >= pau.threshold() && rs < run.threshold() {
+            return Ok(PauseVerdict {
+                paused: true,
+                method: "hud",
+                running_score,
+                paused_score,
+            });
+        }
+        if rs >= run.threshold() && ps < pau.threshold() {
+            return Ok(PauseVerdict {
+                paused: false,
+                method: "hud",
+                running_score,
+                paused_score,
+            });
+        }
+    }
     tokio::time::sleep(gap).await;
     let second = capture_bgr(device).await?;
-    Ok(digest(&first) == digest(&second))
+    Ok(PauseVerdict {
+        paused: digest(&first) == digest(&second),
+        method: "frames",
+        running_score,
+        paused_score,
+    })
 }
 
 fn png_of(frame: &BgrFrame) -> Result<Vec<u8>> {
@@ -144,6 +195,7 @@ pub struct StartPausedOptions {
     pub timeout: Duration,
     pub pause_gap: Duration,
     pub settle: Duration,
+    pub hud_grace: Duration,
 }
 
 impl StartPausedOptions {
@@ -154,6 +206,7 @@ impl StartPausedOptions {
             timeout,
             pause_gap: PAUSE_GAP,
             settle: Duration::from_millis(1000),
+            hud_grace: Duration::from_secs(8),
         }
     }
 }
@@ -168,6 +221,7 @@ pub struct StartPausedReport {
     pub pause_attempts: u32,
     pub paused: bool,
     pub hud_detected: Option<bool>,
+    pub hud_score: Option<f64>,
     pub start_task_state: Option<String>,
     pub waited_seconds: f64,
     #[serde(skip_serializing)]
@@ -185,6 +239,7 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
         pause_attempts: 0,
         paused: false,
         hud_detected: None,
+        hud_score: None,
         start_task_state: None,
         waited_seconds: 0.0,
         frame_png: None,
@@ -218,14 +273,20 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
     };
     let start_id = start_task.task_id;
 
-    let has_template = device.hud_template()?.is_some();
+    let template = device.hud_template()?;
+    let has_template = template.is_some();
     let deadline = started + opts.timeout;
     let mut fired = false;
     let mut last_frame: Option<BgrFrame> = None;
+    let mut hud_grace_deadline: Option<Instant> = None;
     while Instant::now() < deadline {
         let frame = capture_bgr(device).await?;
-        let hud = match device.hud_template()? {
-            Some(t) => Some(t.matches(&frame)?),
+        let hud = match template {
+            Some(t) => {
+                let score = t.score(&frame)?;
+                report.hud_score = Some(report.hud_score.map_or(score, |s: f64| s.max(score)));
+                Some(score >= t.threshold())
+            }
             None => None,
         };
         report.hud_detected = hud;
@@ -237,11 +298,24 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
             last_frame = Some(frame);
             break;
         }
-        if is_terminal(state.as_deref()) && digest(&frame) != before {
-            report.fired_on = Some("start_step".to_string());
-            fired = true;
-            last_frame = Some(frame);
-            break;
+        if is_terminal(state.as_deref()) {
+            if !has_template {
+                if digest(&frame) != before {
+                    report.fired_on = Some("start_step".to_string());
+                    fired = true;
+                    last_frame = Some(frame);
+                    break;
+                }
+            } else {
+                let grace_end = hud_grace_deadline
+                    .get_or_insert((Instant::now() + opts.hud_grace).min(deadline));
+                if Instant::now() >= *grace_end {
+                    report.fired_on = Some("start_step_after_hud_grace".to_string());
+                    fired = true;
+                    last_frame = Some(frame);
+                    break;
+                }
+            }
         }
         last_frame = Some(frame);
         tokio::time::sleep(opts.poll).await;
@@ -257,41 +331,31 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
         return Ok(report);
     }
 
-    click_pause(device).await?;
-    report.pause_attempts = 1;
-
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    if !is_terminal(task_state(device, start_id).as_deref()) && !remaining.is_zero() {
-        let outcome = device
-            .session
-            .wait(
-                WaitCondition::TaskDone,
-                Some(start_id),
-                0,
-                remaining,
-                DEFAULT_STALL,
-            )
-            .await;
-        report.start_task_state = task_state(device, start_id);
-        if matches!(outcome, Ok(o) if !o.triggered) {
-            report.failed_at = Some("start".to_string());
-            report.detail = Some("start step did not finish before the timeout".to_string());
-            report.waited_seconds = started.elapsed().as_secs_f64();
-            let frame = capture_bgr(device).await?;
-            report.frame_png = Some(png_of(&frame)?);
-            return Ok(report);
+    let mut paused = false;
+    while !paused && Instant::now() < deadline {
+        click_pause(device).await?;
+        report.pause_attempts += 1;
+        tokio::time::sleep(opts.settle).await;
+        let verdict = is_paused(device, opts.pause_gap).await?;
+        if let Some(s) = verdict.running_score {
+            report.hud_score = Some(report.hud_score.map_or(s, |m: f64| m.max(s)));
+        }
+        if verdict.paused {
+            paused = true;
+            break;
+        }
+        tokio::time::sleep(opts.poll).await;
+        if verdict.method == "frames" && Instant::now() < deadline {
+            let recheck = is_paused(device, opts.pause_gap).await?;
+            if let Some(s) = recheck.running_score {
+                report.hud_score = Some(report.hud_score.map_or(s, |m: f64| m.max(s)));
+            }
+            if recheck.paused {
+                paused = true;
+            }
         }
     }
     report.start_task_state = task_state(device, start_id);
-
-    tokio::time::sleep(opts.settle).await;
-    let mut paused = is_paused(device, opts.pause_gap).await?;
-    if !paused {
-        click_pause(device).await?;
-        report.pause_attempts = 2;
-        tokio::time::sleep(opts.settle).await;
-        paused = is_paused(device, opts.pause_gap).await?;
-    }
 
     let frame = capture_bgr(device).await?;
     report.frame_png = Some(png_of(&frame)?);
@@ -300,20 +364,24 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
     if paused {
         let mut detail = match report.fired_on.as_deref() {
             Some("hud") => "paused on HUD template match".to_string(),
-            _ if has_template => {
-                "paused on start-step completion; HUD template never matched (check hud_template/hud_roi)".to_string()
+            Some("start_step_after_hud_grace") => {
+                "paused after the HUD grace elapsed; HUD template never matched (check hud_template/hud_roi)".to_string()
             }
             _ => "paused on start-step completion with a changed frame".to_string(),
         };
-        if report.pause_attempts == 2 {
-            detail.push_str("; second click needed");
+        match report.pause_attempts {
+            2 => detail.push_str("; second click needed"),
+            n if n > 2 => detail.push_str(&format!("; {n} pause clicks needed")),
+            _ => {}
         }
         report.detail = Some(detail);
     } else {
         report.failed_at = Some("pause".to_string());
-        report.detail = Some(
-            "screen kept changing after two pause clicks; the battle is still running".to_string(),
-        );
+        report.detail = Some(format!(
+            "screen kept changing after {} pause clicks over {:.1}s; the battle is still running",
+            report.pause_attempts,
+            started.elapsed().as_secs_f64()
+        ));
     }
     report.waited_seconds = started.elapsed().as_secs_f64();
     Ok(report)
@@ -370,7 +438,7 @@ pub async fn deploy_batch(
             "location": step.location,
             "direction": step.direction,
         });
-        let outcome = run_step(device, "action", Some(details), step_timeout).await;
+        let outcome = run_action(device, details, step_timeout).await;
         let error = match &outcome {
             StepOutcome::Done(_) => None,
             other => Some(other.describe()),
@@ -381,7 +449,7 @@ pub async fn deploy_batch(
                 "name": step.name,
                 "skill_usage": usage,
             });
-            let skill_outcome = run_step(device, "action", Some(skill), step_timeout).await;
+            let skill_outcome = run_action(device, skill, step_timeout).await;
             match &skill_outcome {
                 StepOutcome::Done(_) => None,
                 other => Some(other.describe()),
@@ -459,6 +527,9 @@ pub async fn resume_until(
 #[derive(Debug, Serialize)]
 pub struct PauseReport {
     pub paused: bool,
+    pub method: &'static str,
+    pub running_score: Option<f64>,
+    pub paused_score: Option<f64>,
     #[serde(skip_serializing)]
     pub frame_png: Vec<u8>,
 }
@@ -466,10 +537,13 @@ pub struct PauseReport {
 pub async fn pause(device: &Device) -> Result<PauseReport> {
     click_pause(device).await?;
     tokio::time::sleep(Duration::from_millis(800)).await;
-    let paused = is_paused(device, PAUSE_GAP).await?;
+    let verdict = is_paused(device, PAUSE_GAP).await?;
     let frame = capture_bgr(device).await?;
     Ok(PauseReport {
-        paused,
+        paused: verdict.paused,
+        method: verdict.method,
+        running_score: verdict.running_score,
+        paused_score: verdict.paused_score,
         frame_png: png_of(&frame)?,
     })
 }
