@@ -13,6 +13,12 @@ async fn stdio_proxy_forwards_to_daemon() {
     let factory = FakeCoreFactory::new();
     let mut config = Config::default();
     config.server.bind = "127.0.0.1:0".parse().unwrap();
+    config.devices = vec![arkd_core::config::DeviceConfig {
+        name: "fake".to_string(),
+        default: true,
+        device_size: Some((1920, 1080)),
+        ..arkd_core::config::DeviceConfig::default()
+    }];
     let state = App::build(config, Arc::new(factory), "fake".to_string()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -111,6 +117,12 @@ async fn stdio_proxy_sends_custom_headers() {
     let factory = FakeCoreFactory::new();
     let mut config = Config::default();
     config.server.bind = "127.0.0.1:0".parse().unwrap();
+    config.devices = vec![arkd_core::config::DeviceConfig {
+        name: "fake".to_string(),
+        default: true,
+        device_size: Some((1920, 1080)),
+        ..arkd_core::config::DeviceConfig::default()
+    }];
     let state = App::build(config, Arc::new(factory), "fake".to_string()).unwrap();
     let router = App::router(state).layer(axum::middleware::from_fn(
         move |req: axum::extract::Request, next: axum::middleware::Next| {
