@@ -1,0 +1,10 @@
+/target
+*.png
+!assets/**/*.png
+*.jpg
+*.jpeg
+/docs/spike/*.png
+.DS_Store
+/state/
+/.devin/capabilities.md
+/.claude/capabilities.md
