@@ -1064,3 +1064,24 @@ fn zero_elapsed_is_reported_as_zero_not_missing() {
         .expect("a just-started battle must report 0-ish elapsed, not missing");
     assert!(in_battle < 1.0, "{in_battle}");
 }
+
+#[test]
+fn stop_survives_callbacks_fired_during_the_stop_call() {
+    let (session, core) = connected();
+    session
+        .append_task("Fight", serde_json::json!({"stage": "1-7"}))
+        .unwrap();
+    session.start().unwrap();
+    assert!(core.running());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s = session.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(s.stop());
+    });
+    let out = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stop deadlocked on a synchronous callback")
+        .unwrap();
+    assert!(out.stopped);
+    assert_eq!(out.cleared_tasks, 1);
+}

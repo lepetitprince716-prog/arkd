@@ -224,16 +224,13 @@ impl MaaSession {
         };
         {
             let mut st = inner.state.lock().unwrap();
-            st.events.push(message_id, payload);
-            Self::apply_event(&mut st, message_id);
+            let payload = st.events.push(message_id, payload).payload.clone();
+            Self::apply_event(&mut st, message_id, &payload);
         }
         inner.notify.notify_waiters();
     }
 
-    fn apply_event(st: &mut State, message_id: i32) {
-        let event = st.events.iter().last().unwrap();
-        let payload = event.payload.clone();
-
+    fn apply_event(st: &mut State, message_id: i32, payload: &Value) {
         let chain_state = match message_id {
             msg::TASK_CHAIN_START => Some(STATE_RUNNING),
             msg::TASK_CHAIN_COMPLETED => Some(STATE_COMPLETED),
@@ -373,6 +370,18 @@ impl MaaSession {
         }
     }
 
+    pub fn connected(&self) -> bool {
+        self.inner.core.connected()
+    }
+
+    pub fn running(&self) -> bool {
+        self.inner.core.running()
+    }
+
+    pub fn connection(&self) -> Option<ConnectionInfo> {
+        self.inner.state.lock().unwrap().connection.clone()
+    }
+
     pub fn require_connection(&self) -> Result<()> {
         if self.inner.core.connected() {
             Ok(())
@@ -426,31 +435,46 @@ impl MaaSession {
         Ok(resolved)
     }
 
+    fn unknown_task(&self, task_id: i32) -> Error {
+        let st = self.inner.state.lock().unwrap();
+        let known = st
+            .tasks
+            .keys()
+            .map(|k| k.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Error::Validation(format!(
+            "No task with id {task_id} in this session. Queued ids: {}.",
+            if known.is_empty() {
+                "none".into()
+            } else {
+                known
+            }
+        ))
+    }
+
     pub fn set_task_params(&self, task_id: i32, params: Value) -> Result<Value> {
-        let mut st = self.inner.state.lock().unwrap();
-        let task = st.tasks.get(&task_id).ok_or_else(|| {
-            let known = st
-                .tasks
-                .keys()
-                .map(|k| k.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
-            Error::Validation(format!(
-                "No task with id {task_id} in this session. Queued ids: {}.",
-                if known.is_empty() {
-                    "none".into()
-                } else {
-                    known
+        let task_type = {
+            let st = self.inner.state.lock().unwrap();
+            match st.tasks.get(&task_id) {
+                Some(t) => t.task_type.clone(),
+                None => {
+                    drop(st);
+                    return Err(self.unknown_task(task_id));
                 }
-            ))
-        })?;
-        let (_, checked) = catalog::validate(&task.task_type, params)?;
+            }
+        };
+        let (_, checked) = catalog::validate(&task_type, params)?;
         self.inner.core.set_task_params(task_id, &checked.to_string()).map_err(|e| {
             Error::Refused(format!(
-                "MaaCore refused the parameter update for task {task_id} ({}). Several fields cannot be changed once the task is running -- 'stage' on Fight and 'filename' on the copilot tasks among them. ({e})",
-                task.task_type
+                "MaaCore refused the parameter update for task {task_id} ({task_type}). Several fields cannot be changed once the task is running -- 'stage' on Fight and 'filename' on the copilot tasks among them. ({e})"
             ))
         })?;
+        let mut st = self.inner.state.lock().unwrap();
+        if !st.tasks.contains_key(&task_id) {
+            drop(st);
+            return Err(self.unknown_task(task_id));
+        }
         let task = st.tasks.get_mut(&task_id).unwrap();
         task.params = checked;
         Ok(task.describe())
@@ -484,8 +508,8 @@ impl MaaSession {
     }
 
     pub fn stop(&self) -> Result<StopResult> {
-        let mut st = self.inner.state.lock().unwrap();
         let stopped = self.inner.core.stop().is_ok();
+        let mut st = self.inner.state.lock().unwrap();
         for task in st.tasks.values_mut() {
             if task.state == STATE_QUEUED || task.state == STATE_RUNNING {
                 task.state = STATE_STOPPED.to_string();
@@ -581,6 +605,9 @@ impl MaaSession {
     }
 
     pub fn status(&self) -> Status {
+        let version = self.inner.core.version();
+        let connected = self.inner.core.connected();
+        let running = self.inner.core.running();
         let st = self.inner.state.lock().unwrap();
         let tasks: Vec<Value> = st.tasks.values().map(|t| t.describe()).collect();
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -589,9 +616,9 @@ impl MaaSession {
         }
         Status {
             core_loaded: true,
-            core_version: Some(self.inner.core.version()),
-            connected: self.inner.core.connected(),
-            running: self.inner.core.running(),
+            core_version: Some(version),
+            connected,
+            running,
             connection: st.connection.clone(),
             task_counts: counts,
             tasks,
@@ -738,7 +765,7 @@ impl MaaSession {
             if remaining.is_zero() {
                 return Ok(WaitOutcome {
                     triggered: false,
-                    reason: String::new(),
+                    reason: "timeout".to_string(),
                     waited: started.elapsed(),
                 });
             }

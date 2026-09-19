@@ -129,9 +129,8 @@ unsafe extern "C" fn trampoline(msg_id: i32, msg: *const c_char, userdata: *mut 
             "{}".to_string()
         } else {
             unsafe { CStr::from_ptr(msg) }
-                .to_str()
-                .unwrap_or("{}")
-                .to_string()
+                .to_string_lossy()
+                .into_owned()
         };
         (cb.0)(msg_id, &text);
     }));
@@ -220,6 +219,12 @@ impl MaaCoreApi for RealCore {
         if id <= 0 {
             return Err(Error::DeviceConnection(
                 "AsstAsyncConnect returned a failure id".to_string(),
+            ));
+        }
+        // Safety: handle is live.
+        if unsafe { binding::AsstConnected(self.handle) } == 0 {
+            return Err(Error::DeviceConnection(
+                "MaaCore finished the connection attempt but AsstConnected is false".to_string(),
             ));
         }
         Ok(())
@@ -528,7 +533,13 @@ pub mod fake {
                 serde_json::from_str(params_json).unwrap_or(serde_json::Value::Null);
             let mut tasks = self.tasks.lock().unwrap();
             if let Some(entry) = tasks.iter_mut().find(|(id, _, _)| *id == task_id) {
+                let task_type = entry.1.clone();
                 entry.2 = params;
+                drop(tasks);
+                self.emit(
+                    10003,
+                    serde_json::json!({"taskchain": task_type, "taskid": task_id, "uuid": "fake-uuid"}),
+                );
                 Ok(())
             } else {
                 Err(Error::Refused(format!("no task {task_id}")))
@@ -558,7 +569,16 @@ pub mod fake {
 
         fn stop(&self) -> Result<()> {
             *self.running.lock().unwrap() = false;
-            self.tasks.lock().unwrap().clear();
+            let tasks: Vec<(i32, String)> = std::mem::take(&mut *self.tasks.lock().unwrap())
+                .into_iter()
+                .map(|(id, t, _)| (id, t))
+                .collect();
+            for (id, task_type) in &tasks {
+                self.emit(
+                    10004,
+                    serde_json::json!({"taskchain": task_type, "taskid": id, "uuid": "fake-uuid"}),
+                );
+            }
             Ok(())
         }
 

@@ -43,6 +43,7 @@ pub struct DeviceConfig {
     pub kind: DeviceKind,
     pub connect_config: String,
     pub screenshot_size: (u32, u32),
+    pub device_size: Option<(u32, u32)>,
     pub pause_button_screenshot: (u32, u32),
     pub client_type: String,
 }
@@ -123,6 +124,7 @@ impl Default for DeviceConfig {
             },
             connect_config: "General".to_string(),
             screenshot_size: (1280, 720),
+            device_size: None,
             pause_button_screenshot: (1210, 55),
             client_type: "Official".to_string(),
         }
@@ -135,6 +137,7 @@ fn default_devices() -> Vec<DeviceConfig> {
         vec![DeviceConfig {
             name: "playcover".to_string(),
             default: true,
+            device_size: Some((1920, 1080)),
             ..DeviceConfig::default()
         }]
     }
@@ -364,6 +367,7 @@ impl Config {
                     "touch_mode": d.touch_mode(),
                     "client_type": d.client_type,
                     "screenshot_size": [d.screenshot_size.0, d.screenshot_size.1],
+                    "device_size": d.device_size.map(|(w, h)| [w, h]),
                     "pause_button_screenshot": [d.pause_button_screenshot.0, d.pause_button_screenshot.1],
                 })
             }).collect::<Vec<_>>(),

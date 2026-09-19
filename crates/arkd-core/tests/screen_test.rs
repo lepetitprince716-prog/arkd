@@ -1,7 +1,8 @@
 #![cfg(feature = "fake")]
 
+use arkd_core::playtools::Frame;
 use arkd_core::screen::{
-    CoordSpace, EncodeOpts, Geometry, ImageFormat, encode_png, png_dimensions,
+    CoordSpace, EncodeOpts, Geometry, ImageFormat, encode_frame, encode_png, png_dimensions,
 };
 
 fn test_png(w: u32, h: u32) -> Vec<u8> {
@@ -73,6 +74,27 @@ fn jpeg_mime_and_magic() {
     .unwrap();
     assert_eq!(enc.mime, "image/jpeg");
     assert_eq!(&enc.bytes[..2], &[0xFF, 0xD8]);
+}
+
+#[test]
+fn encode_frame_to_jpeg_works_on_bgr_frames() {
+    let frame = Frame {
+        width: 8,
+        height: 4,
+        bgr: vec![10u8; 8 * 4 * 3],
+    };
+    let enc = encode_frame(
+        &frame,
+        EncodeOpts {
+            scale: 1.0,
+            format: ImageFormat::Jpeg,
+            quality: 80,
+        },
+    )
+    .unwrap();
+    assert_eq!(enc.mime, "image/jpeg");
+    assert_eq!(&enc.bytes[..2], &[0xFF, 0xD8]);
+    assert_eq!((enc.width, enc.height), (8, 4));
 }
 
 #[test]

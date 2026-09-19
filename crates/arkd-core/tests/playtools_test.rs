@@ -32,8 +32,8 @@ async fn handshake_version_size_bundle() {
     let mut client = PlayToolsClient::connect(&server.addr.to_string(), Duration::from_secs(5))
         .await
         .unwrap();
-    assert_eq!(client.version().await.unwrap(), 3);
-    assert_eq!(client.size().await.unwrap(), (16, 8));
+    assert_eq!(client.version(), 3);
+    assert_eq!(client.size(), (16, 8));
     assert_eq!(
         client.bundle_id().await.unwrap(),
         "com.hypergryph.arknights"
