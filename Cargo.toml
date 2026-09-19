@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = ["crates/arkd-core", "crates/arkd"]
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only"
+rust-version = "1.88"
+
+[workspace.dependencies]
+maa-sys = { git = "https://github.com/MaaAssistantArknights/maa-cli", rev = "aebb5e9e064a18c81f5241b8e83baa5ed10bc385", default-features = false, features = ["runtime"] }
+maa-core = { git = "https://github.com/MaaAssistantArknights/maa-cli", rev = "aebb5e9e064a18c81f5241b8e83baa5ed10bc385", default-features = false, features = ["runtime"] }
+maa-types = { git = "https://github.com/MaaAssistantArknights/maa-cli", rev = "aebb5e9e064a18c81f5241b8e83baa5ed10bc385" }
+maa-ffi-types = { git = "https://github.com/MaaAssistantArknights/maa-cli", rev = "aebb5e9e064a18c81f5241b8e83baa5ed10bc385" }
+rmcp = { version = "3.4", features = ["client", "server", "macros", "schemars", "transport-io", "transport-streamable-http-server", "transport-streamable-http-client-reqwest", "reqwest"] }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+toml = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+jsonschema = "0.56"
