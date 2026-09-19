@@ -107,3 +107,75 @@ fn get_picks_the_default_and_rejects_unknown_names() {
     assert!(!list[1].connected);
     assert!(!list[1].busy);
 }
+
+#[tokio::test]
+async fn geometry_prefers_configured_device_size() {
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            device_size: Some((1920, 1080)),
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    let geo = device.geometry().await.unwrap();
+    assert_eq!(geo.device, (1920, 1080));
+    assert_eq!(geo.screenshot, (1280, 720));
+}
+
+#[tokio::test]
+async fn geometry_uses_an_already_connected_playtools_client() {
+    use arkd_core::playtools::Frame;
+    use arkd_core::playtools::fake::FakePlayToolsServer;
+
+    let server = FakePlayToolsServer::spawn(
+        Frame {
+            width: 4,
+            height: 2,
+            bgr: vec![0u8; 4 * 2 * 3],
+        },
+        3,
+    )
+    .await;
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            kind: DeviceKind::Playtools {
+                address: server.addr.to_string(),
+            },
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    drop(device.playtools().await.unwrap());
+    let geo = device.geometry().await.unwrap();
+    assert_eq!(geo.device, (4, 2));
+}
+
+#[tokio::test]
+async fn geometry_falls_back_to_screenshot_size_without_a_socket() {
+    let factory = Arc::new(FakeCoreFactory::new());
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "playcover".to_string(),
+            default: true,
+            kind: DeviceKind::Playtools {
+                address: "127.0.0.1:1".to_string(),
+            },
+            ..DeviceConfig::default()
+        }],
+        ..Config::default()
+    };
+    let registry = DeviceRegistry::from_config(&config, factory).unwrap();
+    let device = registry.get(None).unwrap();
+    let geo = device.geometry().await.unwrap();
+    assert_eq!(geo.device, (1280, 720));
+}

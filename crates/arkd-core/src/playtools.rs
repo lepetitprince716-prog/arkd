@@ -26,11 +26,11 @@ pub struct Frame {
 
 impl Frame {
     pub fn to_png(&self) -> Result<Vec<u8>> {
-        let mut rgba = Vec::with_capacity((self.width * self.height * 4) as usize);
+        let mut rgb = Vec::with_capacity(self.width as usize * self.height as usize * 3);
         for px in self.bgr.as_chunks::<3>().0 {
-            rgba.extend_from_slice(&[px[2], px[1], px[0], 255]);
+            rgb.extend_from_slice(&[px[2], px[1], px[0]]);
         }
-        let img = image::RgbaImage::from_raw(self.width, self.height, rgba).ok_or_else(|| {
+        let img = image::RgbImage::from_raw(self.width, self.height, rgb).ok_or_else(|| {
             Error::Image(format!(
                 "frame dimensions {}x{} do not match {} bytes",
                 self.width,
@@ -45,7 +45,7 @@ impl Frame {
             img.as_raw(),
             self.width,
             self.height,
-            image::ExtendedColorType::Rgba8,
+            image::ExtendedColorType::Rgb8,
         )
         .map_err(|e| Error::Image(format!("PNG encode failed: {e}")))?;
         Ok(out)
@@ -56,6 +56,8 @@ impl Frame {
 pub struct PlayToolsClient {
     stream: TcpStream,
     timeout: Duration,
+    version: u32,
+    size: (u16, u16),
 }
 
 impl PlayToolsClient {
@@ -70,10 +72,17 @@ impl PlayToolsClient {
             .map_err(|_| Error::PlayTools(format!("connect to {addr} timed out")))?
             .map_err(|e| Error::PlayTools(format!("connect to {addr} failed: {e}")))?;
         stream.set_nodelay(true).ok();
-        let mut client = Self { stream, timeout };
+        let mut client = Self {
+            stream,
+            timeout,
+            version: 0,
+            size: (0, 0),
+        };
         tokio::time::timeout(timeout, client.handshake())
             .await
             .map_err(|_| Error::PlayTools("handshake timed out".to_string()))??;
+        client.version = client.query_version().await?;
+        client.size = client.query_size().await?;
         Ok(client)
     }
 
@@ -108,13 +117,13 @@ impl PlayToolsClient {
         Ok(buf)
     }
 
-    pub async fn version(&mut self) -> Result<u32> {
+    async fn query_version(&mut self) -> Result<u32> {
         self.request(b"VERN").await?;
         let b = self.read_n(4).await?;
         Ok(u32::from_be_bytes(b.try_into().unwrap()))
     }
 
-    pub async fn size(&mut self) -> Result<(u16, u16)> {
+    async fn query_size(&mut self) -> Result<(u16, u16)> {
         self.request(b"SIZE").await?;
         let b = self.read_n(4).await?;
         Ok((
@@ -123,10 +132,23 @@ impl PlayToolsClient {
         ))
     }
 
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+
+    pub fn size(&self) -> (u16, u16) {
+        self.size
+    }
+
+    pub async fn refresh_size(&mut self) -> Result<(u16, u16)> {
+        self.size = self.query_size().await?;
+        Ok(self.size)
+    }
+
     pub async fn bundle_id(&mut self) -> Result<String> {
         self.request(b"BNDL").await?;
-        let b = self.read_n(2).await?;
-        let n = u16::from_be_bytes(b.try_into().unwrap()) as usize;
+        let b = self.read_n(4).await?;
+        let n = u32::from_be_bytes(b.try_into().unwrap()) as usize;
         let s = self.read_n(n).await?;
         String::from_utf8(s).map_err(|e| Error::PlayTools(format!("BNDL reply: {e}")))
     }
@@ -136,8 +158,8 @@ impl PlayToolsClient {
         let h = self.read_n(4).await?;
         let n = u32::from_be_bytes(h.try_into().unwrap()) as usize;
         let rgba = self.read_n(n).await?;
-        let (w, hgt) = self.size().await?;
-        let mut bgr = Vec::with_capacity((w as usize) * (hgt as usize) * 3);
+        let (w, hgt) = self.size;
+        let mut bgr = Vec::with_capacity(w as usize * hgt as usize * 3);
         for px in rgba.as_chunks::<4>().0 {
             bgr.extend_from_slice(&[px[2], px[1], px[0]]);
         }
@@ -163,7 +185,7 @@ impl PlayToolsClient {
     }
 
     pub async fn capture(&mut self) -> Result<Frame> {
-        if self.version().await? >= 3 {
+        if self.version >= 3 {
             self.capture_bgr().await
         } else {
             self.capture_rgba().await
@@ -297,7 +319,7 @@ pub mod fake {
                 }
                 b"BNDL" => {
                     let name = b"com.hypergryph.arknights";
-                    stream.write_all(&(name.len() as u16).to_be_bytes()).await?;
+                    stream.write_all(&(name.len() as u32).to_be_bytes()).await?;
                     stream.write_all(name).await?;
                 }
                 b"SCRN" => {

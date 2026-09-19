@@ -23,6 +23,7 @@ pub struct Device {
     pub session: MaaSession,
     playtools: Mutex<Option<PlayToolsClient>>,
     action_lock: Mutex<()>,
+    connect_lock: Mutex<()>,
     busy: AtomicBool,
 }
 
@@ -32,23 +33,27 @@ impl Device {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.session.status().connected
+        self.session.connected()
     }
 
     pub async fn ensure_connected(&self) -> Result<ConnectionInfo> {
-        if self.session.status().connected {
+        let _guard = self.connect_lock.lock().await;
+        if self.session.connected() {
             return self
                 .session
-                .status()
-                .connection
+                .connection()
                 .ok_or_else(|| Error::NotConnected("no connection record".to_string()));
         }
-        self.session.connect(
-            self.config.adb_path(),
-            self.config.address(),
-            &self.config.connect_config,
-            self.config.touch_mode(),
-        )
+        let session = self.session.clone();
+        let adb_path = self.config.adb_path().to_string();
+        let address = self.config.address().to_string();
+        let connect_config = self.config.connect_config.clone();
+        let touch_mode = self.config.touch_mode().to_string();
+        tokio::task::spawn_blocking(move || {
+            session.connect(&adb_path, &address, &connect_config, &touch_mode)
+        })
+        .await
+        .map_err(|e| Error::DeviceConnection(format!("connect task failed: {e}")))?
     }
 
     pub async fn playtools(&self) -> Result<MutexGuard<'_, Option<PlayToolsClient>>> {
@@ -70,11 +75,13 @@ impl Device {
 
     pub async fn geometry(&self) -> Result<Geometry> {
         let screenshot = self.config.screenshot_size;
-        if matches!(self.config.kind, DeviceKind::Playtools { .. })
-            && let Ok(mut guard) = self.playtools().await
-            && let Some(client) = guard.as_mut()
-            && let Ok((w, h)) = client.size().await
+        if let Some(device) = self.config.device_size {
+            return Ok(Geometry { device, screenshot });
+        }
+        if let Ok(guard) = self.playtools.try_lock()
+            && let Some(client) = guard.as_ref()
         {
+            let (w, h) = client.size();
             return Ok(Geometry {
                 device: (w as u32, h as u32),
                 screenshot,
@@ -132,6 +139,7 @@ impl DeviceRegistry {
                 session,
                 playtools: Mutex::new(None),
                 action_lock: Mutex::new(()),
+                connect_lock: Mutex::new(()),
                 busy: AtomicBool::new(false),
             }));
         }

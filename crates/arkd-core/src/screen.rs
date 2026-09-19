@@ -122,10 +122,17 @@ fn encode_dynamic(img: &image::DynamicImage, opts: EncodeOpts) -> Result<Encoded
             .map_err(|e| Error::Image(format!("PNG encode failed: {e}")))?;
         }
         ImageFormat::Jpeg => {
+            let rgb = img.to_rgb8();
             let encoder =
                 image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, opts.quality);
-            img.write_with_encoder(encoder)
-                .map_err(|e| Error::Image(format!("JPEG encode failed: {e}")))?;
+            image::ImageEncoder::write_image(
+                encoder,
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| Error::Image(format!("JPEG encode failed: {e}")))?;
         }
     }
     Ok(Encoded {
