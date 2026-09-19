@@ -94,7 +94,12 @@ async fn router_response(r: &Router, ip: Ipv4Addr, auth: Option<&str>) -> axum::
 }
 
 fn app_state() -> Arc<AppState> {
-    let config = Config::default();
+    app_state_with(|_| {})
+}
+
+fn app_state_with(f: impl FnOnce(&mut Config)) -> Arc<AppState> {
+    let mut config = Config::default();
+    f(&mut config);
     arkd::app::App::build(
         config,
         Arc::new(arkd_core::core_api::fake::FakeCoreFactory::new()),
@@ -170,6 +175,24 @@ async fn route_mcp_passes_loopback_without_token() {
     let app = with_token(app_state());
     let resp = app
         .oneshot(mcp_req(Ipv4Addr::new(127, 0, 0, 1), None))
+        .await
+        .unwrap();
+    assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn route_mcp_requires_token_on_loopback_when_configured() {
+    let mut state = app_state_with(|c| c.server.require_token_on_loopback = true);
+    Arc::get_mut(&mut state).unwrap().token = Some("secret".to_string());
+    let app = arkd::app::App::router(state);
+    let resp = app
+        .clone()
+        .oneshot(mcp_req(Ipv4Addr::new(127, 0, 0, 1), None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    let resp = app
+        .oneshot(mcp_req(Ipv4Addr::new(127, 0, 0, 1), Some("secret")))
         .await
         .unwrap();
     assert_ne!(resp.status(), StatusCode::UNAUTHORIZED);

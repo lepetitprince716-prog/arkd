@@ -1,0 +1,29 @@
+# arkd configuration for a MuMu 12 host (Windows)
+# Copy to %LOCALAPPDATA%\arkd\config.toml and adjust paths.
+
+[server]
+bind = "0.0.0.0:7717"
+token_file = '%LOCALAPPDATA%\arkd\token'
+max_events = 2000
+
+[maa]
+core_dir = 'C:\MAA'
+resource_dir = 'C:\MAA'
+user_dir = '%LOCALAPPDATA%\arkd'
+incremental = []
+
+[[devices]]
+name = "mumu"
+default = true
+kind = "adb"
+adb_path = 'C:\MAA\adb\platform-tools\adb.exe'
+address = "127.0.0.1:16384"
+connect_config = "MuMuEmulator12"
+touch_mode = "maatouch"
+screenshot_size = [1280, 720]
+device_size = [1920, 1080]
+pause_button_screenshot = [1210, 55]
+client_type = "Official"
+# hud_template = 'C:\arkd\hud.png'
+hud_roi = [1180, 30, 60, 50]
+hud_threshold = 0.85

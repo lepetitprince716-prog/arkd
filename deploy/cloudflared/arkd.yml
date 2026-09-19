@@ -1,0 +1,11 @@
+# Cloudflare tunnel for arkd — dedicated config (house pattern: one tunnel
+# per service, do NOT fold into config.yml). Managed by LaunchAgent com.arkd.tunnel.
+# Run: cloudflared tunnel --config ~/.cloudflared/arkd.yml run
+tunnel: <TUNNEL_ID>
+protocol: http2
+credentials-file: /Users/<YOU>/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: arkd.<DOMAIN>
+    service: http://127.0.0.1:7717
+  - service: http_status:404

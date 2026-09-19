@@ -23,6 +23,7 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     pub token_file: Option<PathBuf>,
     pub max_events: usize,
+    pub require_token_on_loopback: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +82,7 @@ impl Default for ServerConfig {
             bind: "127.0.0.1:7717".parse().unwrap(),
             token_file: Some(PathBuf::from("~/.config/arkd/token")),
             max_events: 2000,
+            require_token_on_loopback: false,
         }
     }
 }
