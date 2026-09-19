@@ -15,9 +15,26 @@ pub struct DaemonClient {
 
 impl DaemonClient {
     pub async fn connect(url: &str, token: Option<&str>) -> anyhow::Result<Self> {
+        Self::connect_with_headers(url, token, &[]).await
+    }
+
+    pub async fn connect_with_headers(
+        url: &str,
+        token: Option<&str>,
+        headers: &[(String, String)],
+    ) -> anyhow::Result<Self> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
         if let Some(token) = token {
             config.auth_header = Some(format!("Bearer {token}"));
+        }
+        for (name, value) in headers {
+            let name: reqwest::header::HeaderName = name
+                .parse()
+                .with_context(|| format!("invalid header name {name:?}"))?;
+            let value: reqwest::header::HeaderValue = value
+                .parse()
+                .with_context(|| format!("invalid header value for {name}"))?;
+            config.custom_headers.insert(name, value);
         }
         let transport = StreamableHttpClientTransport::from_config(config);
         let inner = ClientConfig::default()

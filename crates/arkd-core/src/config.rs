@@ -46,6 +46,9 @@ pub struct DeviceConfig {
     pub device_size: Option<(u32, u32)>,
     pub pause_button_screenshot: (u32, u32),
     pub client_type: String,
+    pub hud_template: Option<PathBuf>,
+    pub hud_roi: (u32, u32, u32, u32),
+    pub hud_threshold: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +130,9 @@ impl Default for DeviceConfig {
             device_size: None,
             pause_button_screenshot: (1210, 55),
             client_type: "Official".to_string(),
+            hud_template: None,
+            hud_roi: (1180, 30, 60, 50),
+            hud_threshold: 0.85,
         }
     }
 }
@@ -301,6 +307,9 @@ impl Config {
             .collect();
         self.server.token_file = self.server.token_file.as_ref().map(|p| expand_tilde(p));
         self.job_dir = self.job_dir.as_ref().map(|p| expand_tilde(p));
+        for d in &mut self.devices {
+            d.hud_template = d.hud_template.as_ref().map(|p| expand_tilde(p));
+        }
     }
 
     fn validate(&mut self) -> Result<()> {

@@ -2,6 +2,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use arkd_core::battle;
 use arkd_core::catalog;
 use arkd_core::device::Device;
 use arkd_core::error::Error;
@@ -314,6 +315,145 @@ pub struct BattleActionParams {
     direction: Option<String>,
     #[schemars(description = "Skill usage mode. Required for action='SkillUsage'.")]
     skill_usage: Option<i64>,
+}
+
+fn default_start_timeout() -> u32 {
+    60
+}
+
+fn default_settle_ms() -> u64 {
+    1000
+}
+
+fn default_step_timeout() -> u32 {
+    30
+}
+
+fn default_poll_ms() -> u64 {
+    250
+}
+
+fn default_stable_frames() -> u32 {
+    3
+}
+
+fn default_half() -> f64 {
+    0.5
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BattleStartPausedParams {
+    #[schemars(description = "Device name; defaults to the configured default device.")]
+    device: Option<String>,
+    #[schemars(description = "Stage code, e.g. 'LS-1'. Must be one MAA has tile data for.")]
+    stage: String,
+    #[serde(default = "default_start_timeout")]
+    #[schemars(
+        description = "Give up waiting for the battlefield after this many seconds (5..=300)."
+    )]
+    timeout_seconds: u32,
+    #[serde(default = "default_half")]
+    #[schemars(description = "Image scale for the returned frame (0.1..=1.0).")]
+    scale: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct DeployStepInput {
+    #[schemars(description = "Operator name in the client's language.")]
+    name: String,
+    #[schemars(
+        description = "Deployment tile as [x, y] in the stage's own grid, origin top-left."
+    )]
+    location: [i32; 2],
+    #[serde(default = "default_direction")]
+    #[schemars(
+        description = "Facing: 'Left', 'Right', 'Up', 'Down' or 'None' (左/右/上/下/无 also accepted)."
+    )]
+    direction: String,
+    #[schemars(description = "Optional skill usage mode applied right after the deployment.")]
+    skill_usage: Option<i32>,
+}
+
+fn default_direction() -> String {
+    "Right".to_string()
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BattleDeployBatchParams {
+    #[schemars(description = "Device name; defaults to the configured default device.")]
+    device: Option<String>,
+    #[schemars(description = "Ordered list of deployments to run while paused.")]
+    plan: Vec<DeployStepInput>,
+    #[serde(default = "default_settle_ms")]
+    #[schemars(description = "Milliseconds to let the screen settle between steps.")]
+    settle_ms: u64,
+    #[serde(default = "default_step_timeout")]
+    #[schemars(description = "Per-step timeout in seconds (a Deploy waits for DP).")]
+    step_timeout_seconds: u32,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BattleResumeParams {
+    #[schemars(description = "Device name; defaults to the configured default device.")]
+    device: Option<String>,
+    #[schemars(description = "Seconds to let the battle run before pausing again (1..=600).")]
+    seconds: u32,
+    #[serde(default = "default_poll_ms")]
+    #[schemars(
+        description = "Milliseconds between frames while watching for the screen to settle."
+    )]
+    poll_ms: u64,
+    #[serde(default = "default_stable_frames")]
+    #[schemars(description = "Identical consecutive frames that mean the screen has settled.")]
+    stable_frames: u32,
+    #[serde(default = "default_half")]
+    #[schemars(description = "Image scale for the returned frame (0.1..=1.0).")]
+    scale: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct BattlePauseParams {
+    #[schemars(description = "Device name; defaults to the configured default device.")]
+    device: Option<String>,
+    #[serde(default = "default_half")]
+    #[schemars(description = "Image scale for the returned frame (0.1..=1.0).")]
+    scale: f64,
+}
+
+fn scale_frame(png: &[u8], scale: f64) -> Result<screen::Encoded, ErrorData> {
+    screen::encode_png(
+        png,
+        EncodeOpts {
+            scale,
+            format: ImageFormat::Png,
+            quality: 80,
+        },
+    )
+    .map_err(tool_error)
+}
+
+fn battle_frame_result(
+    report: Value,
+    frame_png: Option<Vec<u8>>,
+    scale: f64,
+) -> Result<CallToolResult, ErrorData> {
+    let mut blocks = vec![ContentBlock::text(report.to_string())];
+    if let Some(png) = frame_png {
+        let encoded = scale_frame(&png, scale)?;
+        blocks.push(ContentBlock::image(
+            BASE64.encode(&encoded.bytes),
+            encoded.mime,
+        ));
+        blocks.push(ContentBlock::text(
+            json!({
+                "width": encoded.width,
+                "height": encoded.height,
+                "coord_space": "screenshot",
+            })
+            .to_string(),
+        ));
+    }
+    Ok(CallToolResult::success(blocks))
 }
 
 impl ArkdServer {
@@ -1191,6 +1331,146 @@ impl ArkdServer {
             .await
             .map_err(tool_error)?;
         json_result(task.describe())
+    }
+
+    #[tool(
+        description = "Enter a stage and pause the battle as soon as the field renders: runs the MaaCore 'stage' and 'start' steps and clicks pause for you, all inside this daemon (the battle context only exists in this process). Inspect the returned frame, then deploy with battle_deploy_batch while paused and let the fight run with battle_resume_until. Do not reproduce this with battle_start + screen_tap yourself -- the timing window is easy to miss."
+    )]
+    async fn battle_start_paused(
+        &self,
+        Parameters(p): Parameters<BattleStartPausedParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !(5..=300).contains(&p.timeout_seconds) {
+            return Err(ErrorData::invalid_params(
+                "timeout_seconds must be within 5..=300",
+                None,
+            ));
+        }
+        if !(0.1..=1.0).contains(&p.scale) {
+            return Err(ErrorData::invalid_params(
+                "scale must be within 0.1..=1.0",
+                None,
+            ));
+        }
+        let device = self.device(p.device.as_ref())?;
+        let opts =
+            battle::StartPausedOptions::new(p.stage, Duration::from_secs(p.timeout_seconds as u64));
+        let report = device
+            .with_action(|| battle::start_paused(&device, opts))
+            .await
+            .map_err(tool_error)?;
+        let value = serde_json::to_value(&report)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        battle_frame_result(value, report.frame_png, p.scale)
+    }
+
+    #[tool(
+        description = "Deploy a batch of operators in one call while the battle is paused (CN client accepts deployments on the paused screen). Each step is a MaaCore Deploy action; a failed step is reported and the batch continues. Intended sequence: battle_start_paused -> look at the frame -> battle_deploy_batch -> battle_resume_until -> repeat."
+    )]
+    async fn battle_deploy_batch(
+        &self,
+        Parameters(p): Parameters<BattleDeployBatchParams>,
+    ) -> Result<Json<Value>, ErrorData> {
+        if p.plan.is_empty() {
+            return Err(ErrorData::invalid_params("plan must not be empty", None));
+        }
+        let device = self.device(p.device.as_ref())?;
+        let plan: Vec<battle::DeployStep> = p
+            .plan
+            .into_iter()
+            .map(|s| battle::DeployStep {
+                name: s.name,
+                location: s.location,
+                direction: s.direction,
+                skill_usage: s.skill_usage,
+            })
+            .collect();
+        let settle = Duration::from_millis(p.settle_ms);
+        let step_timeout = Duration::from_secs(p.step_timeout_seconds as u64);
+        let results = device
+            .with_action(|| battle::deploy_batch(&device, plan, settle, step_timeout))
+            .await
+            .map_err(tool_error)?;
+        let deployed = results.iter().filter(|r| r.frame_changed).count();
+        let errors = results
+            .iter()
+            .filter(|r| r.error.is_some() || r.skill_error.is_some())
+            .count();
+        json_result(json!({
+            "results": results,
+            "deployed": deployed,
+            "errors": errors,
+        }))
+    }
+
+    #[tool(
+        description = "Resume a paused battle and watch until the screen stops changing (a deployment prompt, a kill, an enemy leak). Returns the settled frame; on timeout it clicks pause again so the game is left paused and returns that frame. Pair with battle_start_paused and battle_deploy_batch: resume, look, deploy while paused, resume again."
+    )]
+    async fn battle_resume_until(
+        &self,
+        Parameters(p): Parameters<BattleResumeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !(1..=600).contains(&p.seconds) {
+            return Err(ErrorData::invalid_params(
+                "seconds must be within 1..=600",
+                None,
+            ));
+        }
+        if !(0.1..=1.0).contains(&p.scale) {
+            return Err(ErrorData::invalid_params(
+                "scale must be within 0.1..=1.0",
+                None,
+            ));
+        }
+        let device = self.device(p.device.as_ref())?;
+        let seconds = Duration::from_secs(p.seconds as u64);
+        let poll = Duration::from_millis(p.poll_ms);
+        let stable = p.stable_frames;
+        let report = device
+            .with_action(|| battle::resume_until(&device, seconds, poll, stable))
+            .await
+            .map_err(tool_error)?;
+        let value = serde_json::to_value(&report)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        battle_frame_result(value, Some(report.frame_png), p.scale)
+    }
+
+    #[tool(
+        description = "Pause the battle by clicking the pause button and verify the screen froze. Returns the paused frame. Deployments still work while paused on the CN client."
+    )]
+    async fn battle_pause(
+        &self,
+        Parameters(p): Parameters<BattlePauseParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !(0.1..=1.0).contains(&p.scale) {
+            return Err(ErrorData::invalid_params(
+                "scale must be within 0.1..=1.0",
+                None,
+            ));
+        }
+        let device = self.device(p.device.as_ref())?;
+        let report = device
+            .with_action(|| battle::pause(&device))
+            .await
+            .map_err(tool_error)?;
+        let value = serde_json::to_value(&report)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        battle_frame_result(value, Some(report.frame_png), p.scale)
+    }
+
+    #[tool(
+        description = "Check whether the battle screen is currently paused by comparing two frames a short moment apart. A paused screen produces identical frames; a running one never does."
+    )]
+    async fn battle_is_paused(
+        &self,
+        Parameters(p): Parameters<DeviceParam>,
+    ) -> Result<Json<Value>, ErrorData> {
+        let device = self.device(p.device.as_ref())?;
+        let paused = device
+            .with_action(|| battle::is_paused(&device, Duration::from_millis(600)))
+            .await
+            .map_err(tool_error)?;
+        json_result(json!({"paused": paused}))
     }
 }
 

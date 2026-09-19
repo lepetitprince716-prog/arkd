@@ -45,3 +45,18 @@ All other needed entry points (`AsstCreateEx`, `AsstAsyncConnect`, `AsstAsyncCli
 - `cargo build` succeeds (rustc 1.97.1). Git dep `maa-cli@aebb5e9` resolved and compiled without workarounds.
 - `rmcp` needed the `client` feature added: `transport-streamable-http-client-reqwest` references `RoleClient` which is gated behind `client`; without it rmcp 3.4.0 fails with `unresolved import crate::RoleClient`.
 - `jsonschema` pinned `0.56` (v0.56.0 published 2026-09-10; latest stable ≥7 days).
+
+## HUD template
+
+The HUD template is optional. `battle_start_paused` decides when to click pause
+by watching the battle HUD area of each frame; a configured template
+(`devices[].hud_template`, plus `hud_roi` and `hud_threshold`) lets it fire the
+instant the field renders instead of waiting on MaaCore. Without a template the
+daemon falls back to MaaCore's own `start` single-step completing together with
+a frame that differs from the formation screen.
+
+To capture one later: run `arkd screenshot -o paused.png` on a paused battle,
+crop the configured ROI (default `hud_roi = (1180, 30, 60, 50)` on the 1280x720
+screenshot), save that crop as the template PNG, and set `hud_template` to its
+path in the config. Frames that arrive at a different resolution are scored
+with the ROI scaled proportionally.
