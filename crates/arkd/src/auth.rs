@@ -18,7 +18,7 @@ pub async fn require_bearer(
     req: Request,
     next: Next,
 ) -> Response {
-    if peer.ip().is_loopback() {
+    if peer.ip().is_loopback() && !state.config.server.require_token_on_loopback {
         return next.run(req).await;
     }
     let authorized = req

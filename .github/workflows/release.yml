@@ -1,0 +1,50 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --release -p arkd --locked
+      - name: package (unix)
+        if: matrix.os == 'macos-14'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="arkd-${version}-${{ matrix.target }}"
+          mkdir -p "dist/${pkg}"
+          cp target/release/arkd "dist/${pkg}/"
+          cp LICENSE README.md "dist/${pkg}/"
+          tar -C dist -czf "dist/${pkg}.tar.gz" "${pkg}"
+      - name: package (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $pkg = "arkd-${version}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force "dist/${pkg}" | Out-Null
+          Copy-Item target/release/arkd.exe "dist/${pkg}/"
+          Copy-Item LICENSE, README.md "dist/${pkg}/"
+          Compress-Archive -Path "dist/${pkg}" -DestinationPath "dist/${pkg}.zip"
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip

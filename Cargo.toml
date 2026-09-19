@@ -6,6 +6,7 @@ members = ["crates/arkd-core", "crates/arkd"]
 edition = "2024"
 license = "AGPL-3.0-only"
 rust-version = "1.88"
+repository = "https://github.com/lepetitprince716-prog/arkd"
 
 [workspace.dependencies]
 maa-sys = { git = "https://github.com/MaaAssistantArknights/maa-cli", rev = "aebb5e9e064a18c81f5241b8e83baa5ed10bc385", default-features = false, features = ["runtime"] }
@@ -34,3 +35,8 @@ tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", features = ["json"] }
 rand = "0.9"
 tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
