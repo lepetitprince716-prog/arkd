@@ -1467,7 +1467,7 @@ impl ArkdServer {
     ) -> Result<Json<Value>, ErrorData> {
         let device = self.device(p.device.as_ref())?;
         let paused = device
-            .with_action(|| battle::is_paused(&device, Duration::from_millis(600)))
+            .with_action(|| battle::is_paused(&device, battle::PAUSE_GAP))
             .await
             .map_err(tool_error)?;
         json_result(json!({"paused": paused}))

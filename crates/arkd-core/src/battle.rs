@@ -9,6 +9,8 @@ use crate::playtools::Frame;
 use crate::screen::{CoordSpace, EncodeOpts, ImageFormat, encode_frame};
 use crate::session::{BgrFrame, DEFAULT_STALL, WaitCondition, frame_digest};
 
+pub const PAUSE_GAP: Duration = Duration::from_millis(1200);
+
 const VALID_DIRECTIONS: &[&str] = &[
     "Left", "Right", "Up", "Down", "None", "左", "右", "上", "下", "无",
 ];
@@ -101,13 +103,16 @@ async fn run_step(
         )
         .await;
     match outcome {
-        Ok(o) if o.triggered => StepOutcome::Done(o.reason),
+        Ok(o) if o.triggered && o.reason == "task_completed" => StepOutcome::Done(o.reason),
+        Ok(o) if o.triggered => StepOutcome::Rejected(format!(
+            "step ended in state {}",
+            o.reason.trim_start_matches("task_")
+        )),
         Ok(_) => StepOutcome::Timeout,
         Err(e) => StepOutcome::Rejected(e.to_string()),
     }
 }
 
-/// Two fresh captures `gap` apart; identical digests mean the screen is frozen (paused).
 pub async fn is_paused(device: &Device, gap: Duration) -> Result<bool> {
     let first = capture_bgr(device).await?;
     tokio::time::sleep(gap).await;
@@ -147,7 +152,7 @@ impl StartPausedOptions {
             stage: stage.into(),
             poll: Duration::from_millis(200),
             timeout,
-            pause_gap: Duration::from_millis(1200),
+            pause_gap: PAUSE_GAP,
             settle: Duration::from_millis(1000),
         }
     }
@@ -167,10 +172,6 @@ pub struct StartPausedReport {
     pub frame_png: Option<Vec<u8>>,
 }
 
-/// Load the stage tile map, run the `start` single-step, and pause the battle as
-/// soon as the HUD (or the start task completing) signals the battlefield is up.
-/// Everything runs in this session: MaaCore's battle context only lives in this
-/// process, so later Deploy actions must run through the same device.
 pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<StartPausedReport> {
     let started = Instant::now();
     let mut report = StartPausedReport {
@@ -232,9 +233,12 @@ pub async fn start_paused(device: &Device, opts: StartPausedOptions) -> Result<S
             last_frame = Some(frame);
             break;
         }
-        if !has_template && is_terminal(state.as_deref()) && digest(&frame) != before {
-            report.detail =
-                Some("paused on start-step completion with a changed frame".to_string());
+        if is_terminal(state.as_deref()) && digest(&frame) != before {
+            report.detail = Some(if has_template {
+                "paused on start-step completion; HUD template never matched (check hud_template/hud_roi)".to_string()
+            } else {
+                "paused on start-step completion with a changed frame".to_string()
+            });
             fired = true;
             last_frame = Some(frame);
             break;
@@ -332,10 +336,6 @@ pub struct DeployResult {
     pub elapsed_seconds: f64,
 }
 
-/// Deploy a batch of operators through MaaCore `action` single-steps. Meant to be
-/// run while the battle is paused: CN client accepts deployments on the paused
-/// screen. Steps that fail keep their error in the result; the batch never aborts
-/// early.
 pub async fn deploy_batch(
     device: &Device,
     plan: Vec<DeployStep>,
@@ -403,8 +403,6 @@ pub struct ResumeReport {
     pub frame_png: Vec<u8>,
 }
 
-/// Resume a paused battle and watch until the screen stops changing. On timeout
-/// the pause button is clicked again so the game is left paused.
 pub async fn resume_until(
     device: &Device,
     seconds: Duration,
@@ -455,11 +453,10 @@ pub struct PauseReport {
     pub frame_png: Vec<u8>,
 }
 
-/// Click the pause button and verify the screen froze.
 pub async fn pause(device: &Device) -> Result<PauseReport> {
     click_pause(device).await?;
     tokio::time::sleep(Duration::from_millis(800)).await;
-    let paused = is_paused(device, Duration::from_millis(600)).await?;
+    let paused = is_paused(device, PAUSE_GAP).await?;
     let frame = capture_bgr(device).await?;
     Ok(PauseReport {
         paused,

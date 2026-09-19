@@ -55,8 +55,9 @@ instant the field renders instead of waiting on MaaCore. Without a template the
 daemon falls back to MaaCore's own `start` single-step completing together with
 a frame that differs from the formation screen.
 
-To capture one later: run `arkd screenshot -o paused.png` on a paused battle,
-crop the configured ROI (default `hud_roi = (1180, 30, 60, 50)` on the 1280x720
-screenshot), save that crop as the template PNG, and set `hud_template` to its
-path in the config. Frames that arrive at a different resolution are scored
-with the ROI scaled proportionally.
+To capture one later: run `arkd screenshot -o paused.png` on a paused battle
+(scale 1.0, png) and set `hud_template = "…/paused.png"`. The file is the whole
+frame, not a crop — `HudTemplate::from_png` crops `hud_roi` out of it itself
+(default `hud_roi = (1180, 30, 60, 50)` on the 1280x720 screenshot). Adjust
+`hud_roi` only if the pause button is not at the default position. Frames that
+arrive at a different resolution are scored with the ROI scaled proportionally.
