@@ -121,6 +121,7 @@ async fn handshake_refusal_is_reported() {
         if let Ok((mut s, _)) = listener.accept().await {
             use tokio::io::AsyncWriteExt;
             s.write_all(b"NOPE").await.ok();
+            tokio::time::sleep(Duration::from_secs(3)).await;
         }
     });
     let err = PlayToolsClient::connect(&addr.to_string(), Duration::from_secs(2))
