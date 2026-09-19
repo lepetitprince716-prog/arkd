@@ -68,9 +68,7 @@ async fn start_paused_happy_path_without_template() {
         let (device, core) = setup(None);
         device.ensure_connected().await.unwrap();
         core.set_auto_finish(Duration::from_millis(40));
-        // leading frame is consumed by the first dimensions probe; then the
-        // formation screen, a battlefield frame, and identical paused frames.
-        let mut seeds = vec![200, 1, 1, 2, 3];
+        let mut seeds = vec![200, 1];
         seeds.resize(20, 9);
         core.set_frames(frames(&seeds));
 
@@ -80,6 +78,8 @@ async fn start_paused_happy_path_without_template() {
         assert!(report.ok, "report: {report:?}");
         assert!(report.paused);
         assert_eq!(report.hud_detected, None);
+        assert_eq!(report.fired_on.as_deref(), Some("start_step"));
+        assert_eq!(report.pause_attempts, 1);
         assert_eq!(report.start_task_state.as_deref(), Some("completed"));
         assert!(
             report
@@ -120,6 +120,8 @@ async fn start_paused_with_template_fires_before_task_completes() {
         std::fs::remove_file(&template_path).ok();
         assert!(report.ok, "report: {report:?}");
         assert_eq!(report.hud_detected, Some(true));
+        assert_eq!(report.fired_on.as_deref(), Some("hud"));
+        assert_eq!(report.pause_attempts, 1);
         assert!(
             report.detail.as_deref().unwrap_or_default().contains("HUD"),
             "detail: {:?}",
@@ -195,6 +197,17 @@ async fn start_paused_retries_the_pause_click_once() {
             .unwrap();
         assert!(report.ok, "report: {report:?}");
         assert!(report.paused);
+        assert_eq!(report.fired_on.as_deref(), Some("start_step"));
+        assert_eq!(report.pause_attempts, 2);
+        assert!(
+            report
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("second click needed"),
+            "detail: {:?}",
+            report.detail
+        );
         assert_eq!(core.clicks.lock().unwrap().len(), 2);
     })
     .await
@@ -283,6 +296,7 @@ async fn start_paused_falls_back_to_task_completion_when_template_never_matches(
         std::fs::remove_file(&template_path).ok();
         assert!(report.ok, "report: {report:?}");
         assert_eq!(report.hud_detected, Some(false));
+        assert_eq!(report.fired_on.as_deref(), Some("start_step"));
         assert!(
             report
                 .detail
