@@ -109,6 +109,19 @@ impl Device {
         let _reset = Reset(&self.busy);
         f().await
     }
+
+    pub async fn with_blocking_action<T, F>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce() -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.with_action(|| async {
+            tokio::task::spawn_blocking(f)
+                .await
+                .map_err(|e| Error::CoreLoad(format!("worker task failed: {e}")))?
+        })
+        .await
+    }
 }
 
 pub struct DeviceSummary {
