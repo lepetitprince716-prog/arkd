@@ -12,7 +12,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -24,7 +24,7 @@ jobs:
       - name: build
         run: cargo build --release -p arkd --locked
       - name: package (unix)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-latest'
         run: |
           version="${GITHUB_REF_NAME#v}"
           pkg="arkd-${version}-${{ matrix.target }}"
